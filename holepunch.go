@@ -4,15 +4,18 @@ import (
     "fmt"
     "log"
     "os"
-    "net"
+    // "net"
     "flag"
     "strings"
+
+    "github.com/andrew-d/holepunch/transports"
 )
 
 type PacketTransport interface {
     SendPacket(pkt []byte) error
     GetPacket() ([]byte, error)
     Close()
+    Describe() string
 }
 
 var device = flag.String("d", "", "the tun/tap device to connect to")
@@ -36,16 +39,16 @@ func main() {
     }
 
     // Verify that we have a device and open it.
-    if *device == "" {
+    /* if *device == "" {
         fmt.Println("No TUN/TAP device given!")
         os.Exit(1)
     }
 
-    /* tuntap, err := os.OpenFile(*device, os.O_RDWR, 0666) */
-    /* if err != nil { */
-    /*     log.Fatal(err) */
-    /* } */
-    /* defer tuntap.Close() */
+    tuntap, err := os.OpenFile(*device, os.O_RDWR, 0666)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer tuntap.Close() */
 
     log.Printf("Holepunching with server %s...\n", args[0])
 
@@ -56,17 +59,54 @@ func main() {
     }
 
     // Try each method.
+    var t PacketTransport = nil
     for i := range methods {
+        var currTransport PacketTransport = nil
+
         switch methods[i] {
         case "tcp":
             log.Printf("Trying TCP connection...")
+            currTransport = nil
         case "udp":
             log.Printf("Trying UDP connection...")
-            u := udp.NewUDPTransport(args[0])
+            currTransport = TryUDP(args[0])
         case "icmp":
             log.Printf("Trying ICMP connection...")
+            currTransport = nil
         case "dns":
             log.Printf("Trying DNS connection...")
+            currTransport = nil
+        }
+
+        // Test this method.
+        if TestTransport(currTransport) {
+            t = currTransport
+        } else if currTransport != nil {
+            log.Printf("Error: transport %s did not test successfully\n", currTransport.Describe())
+            currTransport.Close()
+        } else {
+            log.Println("Error: no transport returned")
         }
     }
+
+    if t == nil {
+        log.Fatal("Could not start any transports!")
+    }
+
+    log.Printf("Connected with transport: %s\n", t.Describe())
+}
+
+func TestTransport(t PacketTransport) bool {
+    return false
+}
+
+func TryUDP(server string) *transports.UDPTransport {
+    u, err := transports.NewUDPTransport(server)
+    if err != nil {
+        log.Printf("Error starting UDP transport: %s\n", err)
+        return nil
+    }
+
+    log.Println("Successfully started UDP transport")
+    return u
 }

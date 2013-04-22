@@ -1,12 +1,14 @@
 package transports
 
 import (
+    "fmt"
     "net"
 )
 
 // Simple UDP transport.
 type UDPTransport struct {
     conn *net.UDPConn
+    host string
 }
 
 func NewUDPTransport(server string) (*UDPTransport, error) {
@@ -20,7 +22,7 @@ func NewUDPTransport(server string) (*UDPTransport, error) {
         return nil, err
     }
 
-    r := &UDPTransport{conn}
+    r := &UDPTransport{conn, server}
 
     return r, nil
 }
@@ -42,4 +44,8 @@ func (t *UDPTransport) SendPacket(pkt []byte) error {
 
 func (t* UDPTransport) Close() {
     t.conn.Close()
+}
+
+func (t* UDPTransport) Describe() string {
+    return fmt.Sprintf("UDPTransport(host = %s)", t.host)
 }
