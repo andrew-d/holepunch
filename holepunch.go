@@ -40,15 +40,15 @@ func main() {
 
     // Verify that we have a device and open it.
     /* if *device == "" {
-        fmt.Println("No TUN/TAP device given!")
-        os.Exit(1)
-    }
+           fmt.Println("No TUN/TAP device given!")
+           os.Exit(1)
+       }
 
-    tuntap, err := os.OpenFile(*device, os.O_RDWR, 0666)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer tuntap.Close() */
+       tuntap, err := os.OpenFile(*device, os.O_RDWR, 0666)
+       if err != nil {
+           log.Fatal(err)
+       }
+       defer tuntap.Close() */
 
     log.Printf("Holepunching with server %s...\n", args[0])
 
@@ -79,13 +79,13 @@ func main() {
         }
 
         // Test this method.
-        if TestTransport(currTransport) {
+        if currTransport == nil {
+            log.Println("Error: no transport returned")
+        } else if TestTransport(currTransport) {
             t = currTransport
-        } else if currTransport != nil {
+        } else {
             log.Printf("Error: transport %s did not test successfully\n", currTransport.Describe())
             currTransport.Close()
-        } else {
-            log.Println("Error: no transport returned")
         }
     }
 
