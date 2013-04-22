@@ -1,5 +1,9 @@
 package transports
 
+import (
+    "net"
+)
+
 // Simple UDP transport.
 type UDPTransport struct {
     conn *net.UDPConn
