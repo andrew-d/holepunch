@@ -2,19 +2,22 @@ package main
 
 import (
     "bytes"
+    "crypto/hmac"
+    "crypto/sha256"
     "encoding/binary"
+    "encoding/hex"
     "flag"
     "fmt"
     "io"
     "log"
     "math/rand"
-    "crypto/hmac"
-    "crypto/sha256"
     "net"
     "os"
+    "os/exec"
     "strings"
     "time"
-    "encoding/hex"
+
+    "github.com/andrew-d/holepunch/tuntap"
 )
 
 const MAJOR_VER = 1
@@ -48,6 +51,12 @@ type ClientChallengeResponse struct {
 type ServerAuthenticationResult struct {
     // Success or failure.
     authenticationSuccess bool
+}
+
+type TuntapCollection struct {
+    file        *os.File
+    recvChannel chan []byte
+    eofChannel  chan bool
 }
 
 /* The protocol for communication is simple:
@@ -88,7 +97,7 @@ type PacketClient interface {
     // Get a single packet, returning it and an error.  Will block for some
     // time if no packet is available, and will then return an error if it
     // times out.
-    GetPacket() ([]byte, error)
+    PacketChannel() chan []byte
 
     // Close this transport down.
     Close()
@@ -100,16 +109,18 @@ type PacketClient interface {
 // This interface represents a server - something that will accept clients.
 type GenericServer interface {
     // Accept a single client and return it.
-    AcceptClient() (PacketClient, error)
+    AcceptChannel() chan PacketClient
 }
 
 // Global options
-var device = flag.String("d", "", "the tun/tap device to connect to")
+var ipaddr = flag.String("ip", "", "the IP address of the TUN/TAP device")
+var netmask = flag.String("netmask", "255.255.0.0", "the netmask of the TUN/TAP device")
 var password = flag.String("pass", "insecure", "password for authentication")
 
 // Client options
 var is_client = flag.Bool("c", false, "operate in client mode")
 var method = flag.String("m", "all", "methods to try, as comma-seperated list (tcp/udp/icmp/dns/all)")
+var server_addr = flag.String("server", "10.93.0.1", "ip address of the server")
 
 // Server options
 var is_server = flag.Bool("s", false, "operate in server mode")
@@ -141,34 +152,85 @@ func main() {
         os.Exit(1)
     }
 
-    // Verify that we have a device and open it.
-    if *device == "" {
-        fmt.Fprintf(os.Stderr, "No TUN/TAP device given!\n")
-        os.Exit(1)
+    log.Println("Opening TUN/TAP device...")
+    tuntapDev, devName, err := tuntap.GetTuntapDevice()
+    if err != nil {
+        log.Fatal(err)
     }
+    defer tuntapDev.Close()
 
-    // TODO: add in.  this requires root, so not for testing.
-    /* tuntap, err := os.OpenFile(*device, os.O_RDWR, 0666) */
-    /* if err != nil { */
-    /*    log.Fatal(err) */
-    /* } */
-    /* defer tuntap.Close() */
+    // Configure the device.
+    log.Println("Configuring TUN/TAP device...")
+    configureTuntap(*is_client, devName)
+
+    // Set up two channels from the tuntap device.
+    tuntapCh := make(chan []byte)
+    tuntapEof := make(chan bool)
+
+    // Make our tuntap device.
+    tuntap := TuntapCollection{tuntapDev, tuntapCh, tuntapEof}
+
+    go (func() {
+        packet := make([]byte, 65535)
+        for {
+            n, err := tuntap.file.Read(packet)
+            if err == io.EOF || n == 0 {
+                log.Printf("%d / %s", n, err)
+                tuntap.eofChannel <- true
+                return
+            } else if err != nil {
+                log.Printf("Error reading from tuntap: %s\n", err)
+                continue
+            }
+
+            tuntap.recvChannel <- packet[0:n]
+        }
+    })()
 
     // Kickoff the client or server.
     if *is_client {
-        run_client()
+        runClient(tuntap)
     } else {
-        run_server()
+        runServer(tuntap)
     }
 
     // TODO: run configuration (route adding, iptables NATing, etc.)
+}
+
+func configureTuntap(is_client bool, devName string) {
+    // Configure the TUN/TAP device.
+    // Set default IP address, if needed.
+    if len(*ipaddr) == 0 {
+        if is_client {
+            *ipaddr = "10.93.0.2"
+        } else {
+            *ipaddr = "10.93.0.1"
+        }
+    }
+
+    // Need to run: ifconfig tunX 10.0.0.1 10.0.0.1 netmask 255.255.255.0 up
+    var cmd *exec.Cmd
+    if is_client {
+        cmd = exec.Command("/sbin/ifconfig", devName, *ipaddr, *server_addr, "netmask", *netmask, "up")
+    } else {
+        cmd = exec.Command("/sbin/ifconfig", devName, *ipaddr, *ipaddr, "netmask", *netmask, "up")
+    }
+
+    out, err := cmd.Output()
+    if err != nil {
+        log.Printf("Error running configuration command: %s\n", err)
+    } else {
+        log.Printf("Configured successfully (output: '%s')\n", out)
+    }
+
+    <-time.After(1 * time.Second)
 }
 
 // ============================================================================
 // ================================== SERVER ==================================
 // ============================================================================
 
-func run_server() {
+func runServer(tuntap TuntapCollection) {
     // Kick off each of our individual transports.  Each transport runs its own
     // goroutine.  When a transport receives a connection from a new client,
     // it will kick off a new goroutine with the logic to authenticate and
@@ -179,7 +241,7 @@ func run_server() {
     if err != nil {
         log.Printf("Error creating TCP server: %s\n", err)
     } else {
-        startPacketServer(tcpServer, "TCP")
+        startPacketServer(tuntap, tcpServer, "TCP")
         log.Println("Successfully started TCP server")
     }
 
@@ -187,13 +249,13 @@ func run_server() {
     <-ch
 }
 
-func startPacketServer(server GenericServer, method string) {
+func startPacketServer(tuntap TuntapCollection, server GenericServer, method string) {
     go (func() {
         for {
-            client, _ := server.AcceptClient()
+            client := <-server.AcceptChannel()
             log.Printf("Accepted new client on %s transport\n", method)
 
-            go handle_new_client(&client)
+            go handleNewClient(tuntap, &client)
         }
     })()
 }
@@ -211,7 +273,7 @@ func randomBytes(l int) []byte {
 }
 
 // Authenticate and then handle the client.
-func handle_new_client(client *PacketClient) {
+func handleNewClient(tuntap TuntapCollection, client *PacketClient) {
     // At the end of this function, we're to close the client.
     defer (*client).Close()
 
@@ -227,13 +289,7 @@ func handle_new_client(client *PacketClient) {
     //  - Timeout
     res := make(chan []byte)
     go (func() {
-        for {
-            pkt, err := (*client).GetPacket()
-            if err == nil {
-                res <- pkt
-                return
-            }
-        }
+        res <- (<-(*client).PacketChannel())
     })()
 
     // Calculate the proper response to the challenge.
@@ -268,7 +324,20 @@ func handle_new_client(client *PacketClient) {
     // transport and dump them to our TUN/TAP interface, and read packets from
     // the TUN/TAP interface and dump them to the client.
     for {
-        select {}
+        select {
+        case from_client := <-(*client).PacketChannel():
+            // Got from client, so write to our tuntap.
+            log.Printf("client --> tuntap (%d bytes)\n", len(from_client))
+            tuntap.file.Write(from_client)
+        case from_tuntap := <-tuntap.recvChannel:
+            // Got from client, so send to server.
+            log.Printf("tuntap --> client (%d bytes)\n", len(from_tuntap))
+            (*client).SendPacket(from_tuntap)
+        case <-tuntap.eofChannel:
+            // Done!
+            log.Println("EOF received from TUN/TAP device, exiting...")
+            return
+        }
     }
 }
 
@@ -276,7 +345,7 @@ func handle_new_client(client *PacketClient) {
 // ================================== CLIENT ==================================
 // ============================================================================
 
-func run_client() {
+func runClient(tuntap TuntapCollection) {
     // Verify we have a server address.
     args := flag.Args()
     if len(args) < 1 {
@@ -309,16 +378,21 @@ func run_client() {
             log.Printf("Trying DNS connection...")
         }
 
-        if curr != nil {
-            log.Println("Successfully created transport, starting authentication...")
-        } else {
-            log.Printf("Error: no transport returned (error: %s)\n", err)
+        if err != nil {
+            log.Println("Error: no transport returned")
             continue
         }
+        log.Println("Successfully created transport, starting authentication...")
 
-        // Read a single packet.
-        challenge, err := curr.GetPacket()
-        if err != nil {
+        // Read a single packet, or timeout.
+        var challenge []byte
+        select {
+        case challenge = <-curr.PacketChannel():
+            // Fall through
+        case <-time.After(5 * time.Second):
+            challenge = nil
+        }
+        if challenge == nil {
             log.Printf("Error while reading authentication packet: %s\n", err)
             continue
         }
@@ -336,12 +410,17 @@ func run_client() {
         curr.SendPacket([]byte(expected))
 
         // Read a packet - should contain a literal "success".
-        resp, err := curr.GetPacket()
-        if err != nil {
+        var resp []byte
+        select {
+        case resp = <-curr.PacketChannel():
+            // Fall through
+        case <-time.After(5 * time.Second):
+            resp = nil
+        }
+        if resp == nil {
             log.Printf("Error after authentication: %s", err)
             continue
-        }
-        if bytes.Equal(resp, []byte("success")) {
+        } else if bytes.Equal(resp, []byte("success")) {
             log.Println("Authentication success!")
             client = &curr
             break
@@ -359,6 +438,24 @@ func run_client() {
     }
 
     log.Printf("Connected with transport: %s\n", (*client).Describe())
+
+    // Read from both.
+    for {
+        select {
+        case from_server := <-(*client).PacketChannel():
+            // Got from server, so write to our tuntap.
+            log.Printf("server --> tuntap (%d bytes)\n", len(from_server))
+            tuntap.file.Write(from_server)
+        case from_tuntap := <-tuntap.recvChannel:
+            // Got from client, so send to server.
+            log.Printf("tuntap --> server (%d bytes)\n", len(from_tuntap))
+            (*client).SendPacket(from_tuntap)
+        case <-tuntap.eofChannel:
+            // Done!
+            log.Println("EOF received from TUN/TAP device, exiting...")
+            return
+        }
+    }
 }
 
 // ============================================================================
@@ -375,7 +472,7 @@ type TCPPacketClient struct {
 type TCPPacketServer struct {
     host     string
     listener *net.Listener
-    incoming chan *TCPPacketClient
+    incoming chan PacketClient
 }
 
 const TCP_PORT = 44461
@@ -419,7 +516,7 @@ func NewTCPPacketServer(bindTo string) (*TCPPacketServer, error) {
     }
 
     // Create server.
-    ch := make(chan *TCPPacketClient)
+    ch := make(chan PacketClient)
     server := &TCPPacketServer{bindTo, &listener, ch}
 
     // This goroutine will accept new clients.
@@ -442,9 +539,8 @@ func NewTCPPacketServer(bindTo string) (*TCPPacketServer, error) {
     return server, nil
 }
 
-func (t *TCPPacketServer) AcceptClient() (PacketClient, error) {
-    client := <-t.incoming
-    return client, nil
+func (t *TCPPacketServer) AcceptChannel() chan PacketClient {
+    return t.incoming
 }
 
 func startTcpClientRecv(tcpClient *TCPPacketClient) {
@@ -511,18 +607,9 @@ func (t *TCPPacketClient) SendPacket(pkt []byte) error {
     return nil
 }
 
-func (t *TCPPacketClient) GetPacket() ([]byte, error) {
+func (t *TCPPacketClient) PacketChannel() chan []byte {
     // Read a packet, or timeout.
-    select {
-    case pkt := <-t.incoming:
-        // Got it.
-        return pkt, nil
-    case <-time.After(5 * time.Second):
-        // Fall through
-    }
-
-    // TODO: return a timeout error
-    return nil, nil
+    return t.incoming
 }
 
 func (t *TCPPacketClient) Describe() string {
