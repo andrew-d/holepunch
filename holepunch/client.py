@@ -1,3 +1,9 @@
+"""
+Usage: holepunch client [options] <address>
+
+Options:
+    --methods METH      Methods to try
+"""
 import logging
 
 from . import transports
@@ -6,8 +12,8 @@ from . import transports
 log = logging.getLogger(__name__)
 
 
-def client(device, arguments):
-    log.info("Holepunching with server '%s'...", arguments['<address>'])
+def run(device, arguments):
+    log.debug("Holepunching with server '%s'...", arguments['<address>'])
 
     # Try each method of connection.
     for method in ['tcp', 'udp', 'icmp', 'dns']:
@@ -20,3 +26,9 @@ def client(device, arguments):
             continue
 
         # Test the transport.
+        if test_transport(transport):
+            log.info("Transport '%s' successfully connected!", method)
+
+
+def test_transport(transport):
+    pass

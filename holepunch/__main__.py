@@ -1,14 +1,17 @@
 """Simple, low-configuration VPN
 
 Usage:
-    holepunch client [--netmask=MASK] [--methods=METHODS] <address>
-    holepunch server [--netmask=MASK]
+    holepunch [options] client [<args>...]
+    holepunch [options] server [<args>...]
     holepunch --version
     holepunch (-h | --help)
 
 Options:
     -h --help       Show this screen.
     --version       Show version.
+    -q, --quiet     Only output warnings and errors.
+    -v ,--verbose   Output debug messages (useful for troubleshooting
+                    connection problems).
 
 """
 import logging
@@ -17,17 +20,37 @@ from docopt import docopt
 
 from .config import set_interface_properties
 from .tuntap import TunTapDevice
-from .client import client
-from .server import server
 from .log import setup_logging
+from . import client, server
 
 
 log = logging.getLogger(__name__)
 
 
 def main():
-    setup_logging()
-    arguments = docopt(__doc__, version='Holepunch v0.0.1')
+    args = docopt(__doc__, version='Holepunch v0.0.1', options_first=True)
+
+    # Set up logging.
+    if args['--quiet']:
+        level = logging.WARN
+    elif args['--verbose']:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    setup_logging(level)
+
+    # Depending on the command selected, we pick the appropriate module that we
+    # use for all future calls.
+    if args['client']:
+        cmd = 'client'
+        mod = client
+    else:
+        cmd = 'server'
+        mod = server
+
+    # Parse arguments from the appropriate module.
+    argv = [cmd] + args['<args>']
+    sub_args = docopt(mod.__doc__, argv=argv)
 
     # Set up TUN device - we need this for both server and client.
     log.info("Creating TUN device...")
@@ -35,7 +58,7 @@ def main():
 
     # Configure the device.
     log.info("Configuring the TUN device...")
-    if arguments['client']:
+    if args['client']:
         set_interface_properties(dev.name, '10.93.0.2', '10.93.0.1')
     else:
         set_interface_properties(dev.name, '10.93.0.1', '10.93.0.1')
@@ -43,10 +66,8 @@ def main():
     # Start the device now that we've configured it.
     dev.setup()
 
-    if arguments['client']:
-        client(dev, arguments)
-    else:
-        server(dev, arguments)
+    # Run the right thing.
+    mod.run(dev, sub_args)
 
 
 if __name__ == "__main__":

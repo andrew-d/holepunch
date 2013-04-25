@@ -96,10 +96,13 @@ class CustomFormatter(logging.Formatter):
         return formatted.replace("\n", "\n    ")
 
 
-def setup_logging():
+def setup_logging(level=None):
+    if level is None:
+        level = logging.INFO
+
     log = logging.getLogger()
 
-    log.setLevel(logging.INFO)
+    log.setLevel(level)
     stream = logging.StreamHandler()
     stream.setFormatter(CustomFormatter())
     log.addHandler(stream)
