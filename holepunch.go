@@ -53,12 +53,6 @@ type ServerAuthenticationResult struct {
     authenticationSuccess bool
 }
 
-type TuntapCollection struct {
-    file        *os.File
-    recvChannel chan []byte
-    eofChannel  chan bool
-}
-
 /* The protocol for communication is simple:
  *  - In the negotiation phase, the client sends messages back and forth
  *    to the server to verify connectivity, check versions, and authenticate.
@@ -153,39 +147,18 @@ func main() {
     }
 
     log.Println("Opening TUN/TAP device...")
-    tuntapDev, devName, err := tuntap.GetTuntapDevice()
+    tuntap, err := tuntap.GetTuntapDevice()
     if err != nil {
         log.Fatal(err)
     }
-    defer tuntapDev.Close()
+    defer tuntap.Close()
 
     // Configure the device.
     log.Println("Configuring TUN/TAP device...")
-    configureTuntap(*is_client, devName)
+    configureTuntap(*is_client, tuntap.Name())
 
-    // Set up two channels from the tuntap device.
-    tuntapCh := make(chan []byte)
-    tuntapEof := make(chan bool)
-
-    // Make our tuntap device.
-    tuntap := TuntapCollection{tuntapDev, tuntapCh, tuntapEof}
-
-    go (func() {
-        packet := make([]byte, 65535)
-        for {
-            n, err := tuntap.file.Read(packet)
-            if err == io.EOF || n == 0 {
-                log.Printf("%d / %s", n, err)
-                tuntap.eofChannel <- true
-                return
-            } else if err != nil {
-                log.Printf("Error reading from tuntap: %s\n", err)
-                continue
-            }
-
-            tuntap.recvChannel <- packet[0:n]
-        }
-    })()
+    // Start reading from the TUN/TAP device.
+    tuntap.Start()
 
     // Kickoff the client or server.
     if *is_client {
@@ -230,7 +203,7 @@ func configureTuntap(is_client bool, devName string) {
 // ================================== SERVER ==================================
 // ============================================================================
 
-func runServer(tuntap TuntapCollection) {
+func runServer(tuntap tuntap.Device) {
     // Kick off each of our individual transports.  Each transport runs its own
     // goroutine.  When a transport receives a connection from a new client,
     // it will kick off a new goroutine with the logic to authenticate and
@@ -249,7 +222,7 @@ func runServer(tuntap TuntapCollection) {
     <-ch
 }
 
-func startPacketServer(tuntap TuntapCollection, server GenericServer, method string) {
+func startPacketServer(tuntap tuntap.Device, server GenericServer, method string) {
     go (func() {
         for {
             client := <-server.AcceptChannel()
@@ -273,7 +246,7 @@ func randomBytes(l int) []byte {
 }
 
 // Authenticate and then handle the client.
-func handleNewClient(tuntap TuntapCollection, client *PacketClient) {
+func handleNewClient(tuntap tuntap.Device, client *PacketClient) {
     // At the end of this function, we're to close the client.
     defer (*client).Close()
 
@@ -328,12 +301,12 @@ func handleNewClient(tuntap TuntapCollection, client *PacketClient) {
         case from_client := <-(*client).PacketChannel():
             // Got from client, so write to our tuntap.
             log.Printf("client --> tuntap (%d bytes)\n", len(from_client))
-            tuntap.file.Write(from_client)
-        case from_tuntap := <-tuntap.recvChannel:
+            tuntap.Write(from_client)
+        case from_tuntap := <-tuntap.RecvChannel():
             // Got from client, so send to server.
             log.Printf("tuntap --> client (%d bytes)\n", len(from_tuntap))
             (*client).SendPacket(from_tuntap)
-        case <-tuntap.eofChannel:
+        case <-tuntap.EOFChannel():
             // Done!
             log.Println("EOF received from TUN/TAP device, exiting...")
             return
@@ -345,7 +318,7 @@ func handleNewClient(tuntap TuntapCollection, client *PacketClient) {
 // ================================== CLIENT ==================================
 // ============================================================================
 
-func runClient(tuntap TuntapCollection) {
+func runClient(tuntap tuntap.Device) {
     // Verify we have a server address.
     args := flag.Args()
     if len(args) < 1 {
@@ -363,7 +336,7 @@ func runClient(tuntap TuntapCollection) {
     // Try each method.
     var client *PacketClient = nil
     for i := range methods {
-        var curr PacketClient = nil
+        var curr PacketClient
         var err error
 
         switch methods[i] {
@@ -378,7 +351,7 @@ func runClient(tuntap TuntapCollection) {
             log.Printf("Trying DNS connection...")
         }
 
-        if err != nil {
+        if err != nil || curr == nil {
             log.Println("Error: no transport returned")
             continue
         }
@@ -445,12 +418,12 @@ func runClient(tuntap TuntapCollection) {
         case from_server := <-(*client).PacketChannel():
             // Got from server, so write to our tuntap.
             log.Printf("server --> tuntap (%d bytes)\n", len(from_server))
-            tuntap.file.Write(from_server)
-        case from_tuntap := <-tuntap.recvChannel:
+            tuntap.Write(from_server)
+        case from_tuntap := <-tuntap.RecvChannel():
             // Got from client, so send to server.
             log.Printf("tuntap --> server (%d bytes)\n", len(from_tuntap))
             (*client).SendPacket(from_tuntap)
-        case <-tuntap.eofChannel:
+        case <-tuntap.EOFChannel():
             // Done!
             log.Println("EOF received from TUN/TAP device, exiting...")
             return
