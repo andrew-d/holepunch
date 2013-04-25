@@ -1,19 +1,29 @@
 import os
+import logging
+from select import select
+from threading import Thread
 
 import evergreen
 import evergreen.tasks
-import evergreen.channel
-from evergreen.lib import select
+import evergreen.queue
 
 from .util import get_free_tun_interface
 
 
-def read_from_tuntap(fileno, channel):
+log = logging.getLogger(__name__)
+
+
+# Apparently this must be run in a thread, using the real select() call,, or it
+# does strange things.  Whatever - do it anyway.
+def read_from_tuntap(fileno, q):
     while True:
-        rlist, wlist, xlist = select.select([fileno], [], [])
-        if len(rlist) > 0:
+        rlist, wlist, xlist = select([fileno], [], [])
+        if len(rlist) > 0 and rlist[0] == fileno:
             packet = os.read(fileno, 65535)
-            channel.send(packet)
+
+            # Put on the queue.  Note that we DO want to block here - though
+            # only this current task will block.
+            q.put(packet, True)
 
 
 class DarwinTunTapDevice(object):
@@ -22,18 +32,28 @@ class DarwinTunTapDevice(object):
         self.name = get_free_tun_interface()
 
         # Open the device.
+        log.debug("Opening device: %s", "/dev/" + self.name)
         self.dev = os.open('/dev/' + self.name, os.O_RDWR)
-        self.chan = evergreen.channel.Channel()
+
+        # Our queue is of size 1, as we want the thread (above) to block when
+        # the queue already has a packet.
+        self.queue = evergreen.queue.Queue(1)
+        self.thread = Thread(target=read_from_tuntap,
+                             args=(self.dev, self.queue))
 
     def setup(self):
         """Call this once the TUN device is configured, to start reading."""
-        evergreen.tasks.spawn(read_from_tuntap, self.dev, self.chan)
+        self.thread.daemon = True
+        self.thread.start()
 
     def write_packet(self, packet):
         self.dev.write(packet)
 
-    def get_packet(self):
-        return self.chan.receive()
+    def get_packet(self, timeout=None):
+        if timeout is None:
+            return self.queue.get(True)
+        else:
+            return self.queue.get(False, timeout)
 
     def close(self):
         os.close(self.dev)

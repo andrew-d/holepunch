@@ -4,7 +4,11 @@ Usage: holepunch client [options] <address>
 Options:
     --methods METH      Methods to try
 """
+import hmac
+import hashlib
 import logging
+
+from evergreen.lib import socket
 
 from . import transports
 
@@ -16,19 +20,41 @@ def run(device, arguments):
     log.debug("Holepunching with server '%s'...", arguments['<address>'])
 
     # Try each method of connection.
-    for method in ['tcp', 'udp', 'icmp', 'dns']:
+    methods = arguments['--methods']
+    if methods is None:
+        methods = 'tcp,udp,icmp,dns'
+    methods = [x.strip() for x in methods.split(',')]
+
+    for method in methods:
         log.info("Trying method %s...", method)
         mod = getattr(transports, method)
 
         # Try and create the transport.
-        transport = mod.new(arguments['<address>'])
+        transport = mod.connect(arguments['<address>'])
         if not transport:
             continue
 
         # Test the transport.
-        if test_transport(transport):
+        if test_transport(transport, arguments['--password']):
             log.info("Transport '%s' successfully connected!", method)
 
 
-def test_transport(transport):
-    pass
+def test_transport(transport, password):
+    # Read the nonce from the transport.
+    nonce = transport.get_packet()
+
+    # Compute the HMAC of this challenge
+    hm = hmac.new(password, digestmod=hashlib.sha256)
+    hm.update(nonce)
+
+    # Send the response back.
+    transport.send_packet(hm.hexdigest())
+
+    # Get a packet.
+    ret = transport.get_packet()
+    if ret == 'success':
+        return True
+    elif ret == 'failure':
+        return False
+    else:
+        return False

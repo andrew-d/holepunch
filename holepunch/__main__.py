@@ -12,6 +12,7 @@ Options:
     -q, --quiet     Only output warnings and errors.
     -v ,--verbose   Output debug messages (useful for troubleshooting
                     connection problems).
+    --password PASS The password to use for authentication.
 
 """
 import logging
@@ -51,6 +52,8 @@ def main():
     # Parse arguments from the appropriate module.
     argv = [cmd] + args['<args>']
     sub_args = docopt(mod.__doc__, argv=argv)
+    for i in ['--password']:
+        sub_args[i] = args[i]
 
     # Set up TUN device - we need this for both server and client.
     log.info("Creating TUN device...")
