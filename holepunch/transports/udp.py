@@ -1,2 +1,5 @@
-def new(address):
+def connect(address):
+    pass
+
+def listen():
     pass

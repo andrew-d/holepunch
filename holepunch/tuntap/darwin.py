@@ -53,7 +53,10 @@ class DarwinTunTapDevice(object):
         if timeout is None:
             return self.queue.get(True)
         else:
-            return self.queue.get(False, timeout)
+            try:
+                return self.queue.get(False, timeout)
+            except evergreen.queue.Empty:
+                return None
 
     def close(self):
         os.close(self.dev)

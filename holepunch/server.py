@@ -5,7 +5,13 @@ Options:
     --methods METH      Methods to start (comma-seperated list of: tcp, udp,
                         icmp, dns).  Defaults to all of the methods.
 """
+import logging
+
 from . import transports
+
+
+log = logging.getLogger(__name__)
+
 
 def run(device, arguments):
     # Get methods.

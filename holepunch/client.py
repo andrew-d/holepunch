@@ -25,6 +25,7 @@ def run(device, arguments):
         methods = 'tcp,udp,icmp,dns'
     methods = [x.strip() for x in methods.split(',')]
 
+    found = False
     for method in methods:
         log.info("Trying method %s...", method)
         mod = getattr(transports, method)
@@ -37,6 +38,11 @@ def run(device, arguments):
         # Test the transport.
         if test_transport(transport, arguments['--password']):
             log.info("Transport '%s' successfully connected!", method)
+            found = True
+
+    if found is False:
+        log.error("Did not find a transport that works!")
+        return
 
 
 def test_transport(transport, password):
