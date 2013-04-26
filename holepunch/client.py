@@ -8,9 +8,11 @@ import hmac
 import hashlib
 import logging
 
+import evergreen.tasks
 from evergreen.lib import socket
 
 from . import transports
+from .common import forward_packets
 
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ def run(device, arguments):
     methods = [x.strip() for x in methods.split(',')]
 
     found = False
+    conn = None
     for method in methods:
         log.info("Trying method %s...", method)
         mod = getattr(transports, method)
@@ -36,14 +39,19 @@ def run(device, arguments):
             continue
 
         # Test the transport.
-        if test_transport(transport, arguments['--password']):
+        pwd = arguments['--password'] or ''
+        if test_transport(transport, pwd):
             log.info("Transport '%s' successfully connected!", method)
             found = True
+            conn = transport
 
     if found is False:
         log.error("Did not find a transport that works!")
         return
 
+    # Forward packets.
+    evergreen.tasks.spawn(forward_packets, device, conn, "server", "tun")
+    forward_packets(conn, device, "server", "tun")
 
 def test_transport(transport, password):
     # Read the nonce from the transport.

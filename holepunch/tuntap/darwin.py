@@ -1,6 +1,6 @@
 import os
+import select
 import logging
-from select import select
 from threading import Thread
 
 import evergreen
@@ -17,7 +17,11 @@ log = logging.getLogger(__name__)
 # does strange things.  Whatever - do it anyway.
 def read_from_tuntap(fileno, q):
     while True:
-        rlist, wlist, xlist = select([fileno], [], [])
+        try:
+            rlist, wlist, xlist = select.select([fileno], [], [])
+        except select.error:
+            continue
+
         if len(rlist) > 0 and rlist[0] == fileno:
             packet = os.read(fileno, 65535)
 
@@ -46,7 +50,7 @@ class DarwinTunTapDevice(object):
         self.thread.daemon = True
         self.thread.start()
 
-    def write_packet(self, packet):
+    def send_packet(self, packet):
         self.dev.write(packet)
 
     def get_packet(self, timeout=None):

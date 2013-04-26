@@ -1,5 +1,5 @@
 def connect(address):
     pass
 
-def listen():
+def listen(callback, *args, **kwargs):
     pass
