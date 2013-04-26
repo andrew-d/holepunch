@@ -1,7 +1,7 @@
 import os
 import select
 import logging
-from threading import Thread
+from threading import Thread, Event
 
 import evergreen
 import evergreen.tasks
@@ -11,11 +11,19 @@ from .util import get_free_tun_interface
 
 
 log = logging.getLogger(__name__)
+loop = evergreen.EventLoop()
+
+
+# TODO: make this a persistent task that writes to the queue, or something.
+def _write_to_queue(pkt, q, evt):
+    q.put(pkt, True)
+    evt.set()
 
 
 # Apparently this must be run in a thread, using the real select() call,, or it
 # does strange things.  Whatever - do it anyway.
 def read_from_tuntap(fileno, q):
+    evt = Event()
     while True:
         try:
             rlist, wlist, xlist = select.select([fileno], [], [])
@@ -27,7 +35,11 @@ def read_from_tuntap(fileno, q):
 
             # Put on the queue.  Note that we DO want to block here - though
             # only this current task will block.
-            q.put(packet, True)
+            # HACK HACK GIANT FREAKING HACK
+            loop.call_from_thread(evergreen.tasks.spawn, _write_to_queue,
+                                  packet, q, evt)
+
+            evt.wait()
 
 
 class DarwinTunTapDevice(object):
