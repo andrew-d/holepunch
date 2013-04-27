@@ -1,0 +1,3 @@
+#define holepunch_VERSION_MAJOR @holepunch_VERSION_MAJOR@
+#define holepunch_VERSION_MINOR @holepunch_VERSION_MINOR@
+#define holepunch_VERSION_PATCH @holepunch_VERSION_PATCH@
