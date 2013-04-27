@@ -12,8 +12,8 @@ configure_file (
 
 include_directories("${PROJECT_BINARY_DIR}", "${PROJECT_SOURCE_DIR}/vendor")
 
-find_package(Boost 1.53 COMPONENTS thread REQUIRED)
+find_package(Boost 1.48 COMPONENTS thread REQUIRED)
 include_directories( ${Boost_INCLUDEDIR} )
 
-add_executable(holepunch main.cpp fdutil.cpp)
+add_executable(holepunch main.cpp fdutil.cpp tcp.cpp)
 target_link_libraries(holepunch ${Boost_LIBRARIES})

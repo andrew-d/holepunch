@@ -11,8 +11,8 @@ public:
 
     // Get a packet from the transport.  Block indefinitely, or for a given
     // time in seconds.
-    virtual std::vector<uint8_t> GetPacket() = 0;
-    virtual std::vector<uint8_t> GetPacket(uint32_t timeout) = 0;
+    virtual bool GetPacket(std::vector<uint8_t>& out) = 0;
+    virtual bool GetPacket(std::vector<uint8_t>& out, uint32_t timeout) = 0;
 
     // Helper function - get the name.
     virtual const char* Name() = 0;
@@ -24,11 +24,5 @@ public:
     virtual void Start() = 0;
     virtual IPacketClient* AcceptClient() = 0;
 };
-
-
-// Include actual transports here.
-#include "tcp.hpp"
-#include "udp.hpp"
-
 
 #endif

@@ -11,6 +11,8 @@
 #include "config.h"
 #include "transports.hpp"
 
+#include "tcp.hpp"
+
 #define __STRINGIFY(x)  #x
 #define STRINGIFY(x)    __STRINGIFY(x)
 
@@ -73,17 +75,15 @@ void parseArguments(int argc, char** argv) {
     }
 
     LOG_DEBUG(logger) << "Finished parsing arguments" << std::endl;
-    LOG_INFO(logger) << "Finished parsing arguments" << std::endl;
 }
 
 
 void RunClient() {
-
+    TCPPacketClient* t = new TCPPacketClient(10);
 }
 
 
 void RunServer() {
-    // Launch threads.
     if( options.methods.find("tcp") != options.methods.end() ) {
         LOG_INFO(logger) << "Starting TCP transport..." << std::endl;
     }
