@@ -27,7 +27,16 @@ public:
 
 
 class TCPPacketServer : public IPacketServer {
+private:
+    int     m_socket;
+    bool    started;
 
+public:
+    TCPPacketServer();
+
+    void Start();
+    IPacketClient* AcceptClient();
+    const char* Name();
 };
 
 

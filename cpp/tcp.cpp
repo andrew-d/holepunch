@@ -105,3 +105,58 @@ bool TCPPacketClient::GetPacket(std::vector<uint8_t>& out) {
 const char* TCPPacketClient::Name() {
     return "TCP";
 }
+
+
+
+TCPPacketServer::TCPPacketServer() {
+    started  = false;
+    m_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if( 0 == m_socket ) {
+        LOG_ERROR(logger) << "Error creating socket, errno = " << errno
+            << std::endl;
+        throw "Error creating socket";
+    }
+}
+
+void TCPPacketServer::Start() {
+    // Build the server's internet address.
+    struct sockaddr_in servaddr;
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family      = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port        = htons(PORT);
+
+    // Bind socket.
+    int ret = bind(m_socket, (struct sockaddr *)&servaddr, sizeof(servaddr));
+    if( ret < 0 ) {
+        LOG_ERROR(logger) << "Error binding to port " << PORT << ": error "
+            << ret << std::endl;
+        return;
+    }
+
+    // Start listening.
+    ret = listen(m_socket, 1);
+    if( ret < 0 ) {
+        LOG_ERROR(logger) << "Error calling listen(): " << ret << std::endl;
+        return;
+    }
+
+    // Done!
+    started = true;
+}
+
+IPacketClient* TCPPacketServer::AcceptClient() {
+    // Accept and return a single client.
+    int client_sock = 0;
+    if ( (client_sock = accept(m_socket, NULL, NULL) ) < 0 ) {
+        LOG_ERROR(logger) << "Error calling accept(): " << client_sock
+            << std::endl;
+        return NULL;
+    }
+
+    return new TCPPacketClient(client_sock);
+}
+
+const char* TCPPacketServer::Name() {
+    return "TCP";
+}

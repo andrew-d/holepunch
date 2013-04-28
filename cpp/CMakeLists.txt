@@ -10,9 +10,17 @@ configure_file (
     "${PROJECT_BINARY_DIR}/config.h"
     )
 
+# Define stuff per-platform.
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+endif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    add_definitions(-DCPPLOG_USE_SYSCALL_FOR_THREAD_ID)
+endif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+
 include_directories("${PROJECT_BINARY_DIR}", "${PROJECT_SOURCE_DIR}/vendor")
 
-find_package(Boost 1.48 COMPONENTS thread REQUIRED)
+find_package(Boost 1.48 COMPONENTS thread system REQUIRED)
 include_directories( ${Boost_INCLUDEDIR} )
 
 add_executable(holepunch main.cpp fdutil.cpp tcp.cpp)

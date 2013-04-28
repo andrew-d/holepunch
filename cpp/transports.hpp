@@ -23,6 +23,9 @@ class IPacketServer {
 public:
     virtual void Start() = 0;
     virtual IPacketClient* AcceptClient() = 0;
+
+    // Helper function - get the name.
+    const char* Name();
 };
 
 #endif
