@@ -25,7 +25,7 @@ public:
     virtual IPacketClient* AcceptClient() = 0;
 
     // Helper function - get the name.
-    const char* Name();
+    virtual const char* Name() = 0;
 };
 
 #endif

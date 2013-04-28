@@ -20,7 +20,7 @@ endif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 
 include_directories("${PROJECT_BINARY_DIR}", "${PROJECT_SOURCE_DIR}/vendor")
 
-find_package(Boost 1.48 COMPONENTS thread system REQUIRED)
+find_package(Boost 1.48 COMPONENTS thread system program_options REQUIRED)
 include_directories( ${Boost_INCLUDEDIR} )
 
 add_executable(holepunch main.cpp fdutil.cpp tcp.cpp)

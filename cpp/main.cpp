@@ -9,7 +9,6 @@
 #include <boost/date_time.hpp>
 #include <boost/thread/thread.hpp>
 #include <boost/program_options.hpp>
-#include <tclap/CmdLine.h>
 
 #include "cpplog.hpp"
 #include "config.h"
@@ -65,60 +64,169 @@ struct _options_t {
 
     // Connection methods to use (e.g. TCP, UDP, etc.)
     std::set<std::string>       methods;
+
+    // Remote host (only if we're a client).
+    std::string                 remote_host;
 } options;
 
 
-cpplog::OstreamLogger logger(std::cout);
+cpplog::BaseLogger* logger = new cpplog::OstreamLogger(std::cout);
 
 
-void parseArguments(int argc, char** argv) {
-    try {
-        TCLAP::CmdLine cmd("Some description here", ' ', VERSION);
+void printUsage(char* argv0, po::options_description& options,
+                bool need_newline = false) {
+    std::cerr << "Usage: " << argv0 << " <command> [options]" << std::endl;
 
-        std::vector<std::string> allowed;
-        allowed.push_back("client");
-        allowed.push_back("server");
-        TCLAP::ValuesConstraint<std::string> allowedVals( allowed );
+    // Because boost::program_options is stupid and I'm OCD.
+    if( need_newline )
+        std::cerr << "\n";
 
-        TCLAP::UnlabeledValueArg<std::string> cmdArg("command",
-                "Whether to run client or server", true, "", &allowedVals);
-        cmd.add( cmdArg );
+    std::cerr << options << std::endl;
+    std::cerr << "Valid subcommands:\n"
+              << "  server      Run the holepunch server\n"
+              << "  client      Run the holepunch client\n"
+              << "\n"
+              << "To get more information, run \"holepunch client --help\" or \n"
+              << "\"holepunch server --help\"\n"
+              << std::endl;
+}
 
-        TCLAP::SwitchArg verboseSwitch("v", "verbose",
-                "Be verbose in outputing messages", cmd, false);
-        TCLAP::SwitchArg quietSwitch("q", "quiet",
-                "Only output warnings and errors", cmd, false);
 
-        TCLAP::ValueArg<std::string> passwordArg("p", "password",
-                "The password to use for authentication", true, "", "string");
-        cmd.add(passwordArg);
+int parseArguments(int argc, char** argv) {
+    // Make arguments vector.
+    std::vector<std::string> arguments(argv + 1, argv + argc);
 
-        TCLAP::ValueArg<std::string> methodsArg("m", "methods",
-                "A comma-seperated list of methods to use.  Valid methods "
-                "are: tcp, udp, icmp, and dns.  If not given, will default "
-                "to all methods", false, "tcp,udp,icmp,dns", "string");
-        cmd.add(methodsArg);
+    // Global options.
+    po::options_description globalOptions("Global options");
+    globalOptions.add_options()
+        ("help,h", "Print help messages")
+        ("version,V", "Print program version");
 
-        // Parse arguments here.
-        cmd.parse( argc, argv );
+    // Common operations (i.e. to both client and server).
+    po::options_description commonOptions("Common options");
+    commonOptions.add_options()
+        ("password,p", po::value<std::string>()->required(),
+            "Password to use for authentication")
+        ("methods,m", po::value<std::string>()->default_value("tcp,udp,icmp,dns"),
+            "Comma-seperated list of methods of connection to enable.  Defaults "
+            "to all available methods.")
+        ("verbose,v", "Be more verbose")
+        ("quiet,q", "Be quieter - only show warnings or errors");
 
-        // Fill in options.
-        options.password = passwordArg.getValue();
-        options.client = (cmdArg.getValue() == "client");
+    // Client-specific options.
+    po::positional_options_description clientPositionalOptions;
+    clientPositionalOptions.add("remote_host", 1);
 
-        // Split the methods string, by comma, into our set of methods.
-        boost::split(options.methods, methodsArg.getValue(),
-                boost::is_any_of(","));
-    } catch( TCLAP::ArgException &e) {
-        LOG_ERROR(logger) << "Error: " << e.error() << " for arg " << e.argId() << std::endl;
+    // Server-specific options.
+    // NOTE: None right now.
+
+    po::variables_map vars;
+
+    // Figure out what parser to run by comparing the first argument.  If we
+    // don't have enough arguments, we print an error and then the usage.
+    if( argc < 2 ) {
+        std::cerr << "Error: no subcommand given!\n" << std::endl;
+        printUsage(argv[0], globalOptions, true);
+        return -1;
     }
 
-    LOG_DEBUG(logger) << "Finished parsing arguments" << std::endl;
+    // Compare the first string.
+    po::options_description allOptions;
+    allOptions.add(globalOptions);
+
+    bool validSubcommand = false;
+
+    std::string cmd = arguments[0];
+    arguments.erase(arguments.begin());
+
+    try {
+
+        if( "client" == cmd ) {
+            // Use global, common, and client positional options.
+            options.client = true;
+            validSubcommand = true;
+            po::store(po::command_line_parser(arguments)
+                            .options(allOptions.add(commonOptions))
+                            .positional(clientPositionalOptions).run(),
+                      vars);
+
+        } else if( "server" == cmd ) {
+            // Use global and common options.
+            options.client = false;
+            validSubcommand = true;
+            po::store(po::command_line_parser(arguments)
+                            .options(allOptions.add(commonOptions)).run(),
+                      vars);
+
+        } else {
+            // Do nothing (just generic options, above).
+            po::store(po::command_line_parser(arguments)
+                            .options(allOptions).run(),
+                      vars);
+
+        }
+
+        if( vars.count("help") ) {
+            printUsage(argv[0], allOptions);
+            return -1;
+        }
+
+        po::notify(vars);
+
+        // Parse verbosity/quiet.
+        if( vars.count("quiet") ) {
+            options.verbosity = LL_WARN;
+        } else if( vars.count("verbose") ) {
+            options.verbosity = LL_DEBUG;
+        } else {
+            options.verbosity = LL_INFO;
+        }
+
+        if( !validSubcommand ) {
+            std::cerr << "Error: invalid subcommand \"" << cmd << "\"\n" << std::endl;
+            printUsage(argv[0], allOptions);
+            return -1;
+        }
+
+        // Split the methods string, by comma, into our set of methods.
+        boost::split(options.methods,
+                     vars["methods"].as<std::string>(),
+                     boost::is_any_of(","));
+
+        // If we're the client, we get the positional arguments now.
+        if( options.client ) {
+
+            if( vars.count("remote_host" ) > 0 ) {
+                std::vector<std::string> positional =
+                    vars["remote_host"].as< std::vector<std::string> >();
+                std::cout << "\nLength of positional = " << positional.size() << std::endl;
+
+                options.remote_host = positional[0];
+            } else {
+                std::cerr << "Error: no server name provided\n" << std::endl;
+                printUsage(argv[0], allOptions);
+                return -1;
+            }
+        }
+    } catch( po::error& e ) {
+        std::cerr << "Error: " << e.what() << "\n" << std::endl;
+        printUsage(argv[0], allOptions);
+        return -1;
+    }
+
+    // Set up proper logger now (since our first log statement is below).
+    if( LL_DEBUG != options.verbosity ) {
+        logger = new cpplog::FilteringLogger(options.verbosity, logger);
+    }
+
+    LOG_DEBUG(logger) << "Successfully parsed arguments" << std::endl;
+
+    return 0;
 }
 
 
 void RunClient() {
-    TCPPacketClient* t = new TCPPacketClient(options.host);
+    /* TCPPacketClient* t = new TCPPacketClient(options.host); */
 }
 
 
@@ -188,7 +296,14 @@ void RunServer() {
 
 
 int main(int argc, char** argv) {
-    parseArguments(argc, argv);
+    int ret = parseArguments(argc, argv);
+    if( ret != 0 ) {
+        if( ret < 0 ) {
+            return 0;
+        } else {
+            return ret;
+        }
+    }
 
     if( options.client ) {
         LOG_INFO(logger) << "Running client..." << std::endl;
