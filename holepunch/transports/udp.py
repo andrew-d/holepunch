@@ -1,3 +1,4 @@
+import time
 import struct
 import socket
 import logging
@@ -51,13 +52,14 @@ ID_KEEPALIVE    = 0x02
 class ReliablePacketTransport(object):
     def __init__(self, underlying):
         self.underlying = underlying
-        self.recv_queue = Queue(5)
-        self.send_queue = Queue(5)
+        self.recv_queue = queue.Queue(5)
+        self.send_queue = queue.Queue(5)
         self.dropped = False
 
         # Sequence numbers.
         self.recv_seq = 0
         self.send_seq = 0
+        self.send_seq_evt = threading.Event()
 
         # Start threads.
 
@@ -72,17 +74,23 @@ class ReliablePacketTransport(object):
 
     def _internal_sender(self):
         keep_alive = CONNECTION_TIMEOUT / 4.0
+        last_send = self.send_seq
+
         while True:
             # If we've dropped connection, finish this thread.
             if self.dropped:
                 break
 
-            # Get a packet.
-            pkt = self.send_queue.get(False, keep_alive)
-
             # Default to sending a keep-alive.
-            if pkt is None:
-                pkt = b'\x02\x00\x00\x00'
+            pkt = b'\x02\x00\x00\x00'
+
+            # Check our sending sequence number.  We essentially want to wait
+            # until the other end has acknowledged a given sequence number
+
+            # Get a packet from the queue.  Note that we set the timeout to be
+            # the keep-alive time, so that if the get operation times out, we
+            # catch it below and send a keep-alive packet.
+            pkt = self.send_queue.get(False, keep_alive)
 
             self.underlying.send_packet(pkt)
 
@@ -98,16 +106,28 @@ class ReliablePacketTransport(object):
             header, data = pkt[:4], pkt[4:]
             type, seq, flags = rel_header.unpack(header)
 
-            # If this is a keep-alive, ignore it.
+            # If this is a keep-alive, ignore it - it just stopped us from
+            # hitting the timeout case above.
             if type == ID_KEEPALIVE:
                 continue
 
-            # If this is an acknowledgement, then we update the sequence counter.
-            # TODO
+            # If this is an acknowledgement, then it is the other end telling
+            # us that it got one of our packets.  We update the send sequence
+            # number, so that our sending thread can proceed.
+            elif type == ID_ACK:
+                self.send_seq = seq
+                self.send_seq_evt.set()
+                continue
 
-            # Check that this sequence number is what we expect.
+            # If we get here, it's should be an ID_DATA packet.
+            elif type != ID_DATA:
+                log.warn("Invalid packet data type: %d", type)
+                continue
+
+            # This is a data packet.  The sequence number should be what we
+            # expect, and, if not, we discard it and re-ack the previous
+            # sequence number.
             if seq != self.recv_seq:
-                # Nope.  Discard this packet, and re-ack the last packet.
                 data = rel_header.pack(ID_ACK, self.recv_seq, 0)
                 valid = False
             else:
@@ -119,7 +139,8 @@ class ReliablePacketTransport(object):
             # Send the correct packet.
             self.underlying.send_packet(data)
 
-            # If it's valid, put on queue and update seq.  This can block.
+            # If it's valid, put on queue and update our receiving sequence
+            # number.  The queue.put operation can block.
             if valid:
                 self.recv_queue.put(data)
                 self.recv_seq = seq
@@ -163,7 +184,7 @@ class UDPClient(ClientBase):
         self.addr = addr
 
     def get_packet(self, timeout=None):
-        # Just read and return a whole packet.
+        # Just read and return a whole packet.  Reliability is at another level
         data, addr = self.sock.recvfrom(65535)
         return data
 
