@@ -17,8 +17,7 @@ Options:
 """
 import logging
 
-from docopt import docopt
-
+from .docopt import docopt
 from .config import set_interface_properties
 from .tuntap import TunTapDevice
 from .log import setup_logging
@@ -68,6 +67,8 @@ def main():
 
     # Start the device now that we've configured it.
     dev.setup()
+
+    # TODO: set up routes for the client
 
     # Run the right thing.
     mod.run(dev, sub_args)

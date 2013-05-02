@@ -1,27 +1,39 @@
 from abc import ABCMeta, abstractmethod, abstractproperty
 
+from ..six import with_metaclass
+
 
 class ConnectionError(Exception):
     pass
 
 
-class ClientBase(object):
-    __metaclass__ = ABCMeta
+class SocketDisconnected(Exception):
+    pass
 
+
+class ClientBase(with_metaclass(ABCMeta)):
     @abstractmethod
     def get_packet(self, timeout=None):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def send_packet(self, packet_data):
-        pass
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self):
+        raise NotImplementedError
 
     @abstractproperty
     def name(self):
-        pass
+        raise NotImplementedError
 
 
-class ServerBase(object):
-    __metaclass__ = ABCMeta
+class ServerBase(with_metaclass(ABCMeta)):
+    @abstractmethod
+    def accept_client(self):
+        raise NotImplementedError
 
-    pass
+    @abstractproperty
+    def name(self):
+        raise NotImplementedError

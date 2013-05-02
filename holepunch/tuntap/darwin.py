@@ -3,43 +3,10 @@ import select
 import logging
 from threading import Thread, Event
 
-import evergreen
-import evergreen.tasks
-import evergreen.queue
-
 from .util import get_free_tun_interface
 
 
 log = logging.getLogger(__name__)
-loop = evergreen.EventLoop()
-
-
-# TODO: make this a persistent task that writes to the queue, or something.
-def _write_to_queue(pkt, q, evt):
-    q.put(pkt, True)
-    evt.set()
-
-
-# Apparently this must be run in a thread, using the real select() call,, or it
-# does strange things.  Whatever - do it anyway.
-def read_from_tuntap(fileno, q):
-    evt = Event()
-    while True:
-        try:
-            rlist, wlist, xlist = select.select([fileno], [], [])
-        except select.error:
-            continue
-
-        if len(rlist) > 0 and rlist[0] == fileno:
-            packet = os.read(fileno, 65535)
-
-            # Put on the queue.  Note that we DO want to block here - though
-            # only this current task will block.
-            # HACK HACK GIANT FREAKING HACK
-            loop.call_from_thread(evergreen.tasks.spawn, _write_to_queue,
-                                  packet, q, evt)
-
-            evt.wait()
 
 
 class DarwinTunTapDevice(object):
@@ -51,28 +18,29 @@ class DarwinTunTapDevice(object):
         log.debug("Opening device: %s", "/dev/" + self.name)
         self.dev = os.open('/dev/' + self.name, os.O_RDWR)
 
-        # Our queue is of size 1, as we want the thread (above) to block when
-        # the queue already has a packet.
-        self.queue = evergreen.queue.Queue(1)
-        self.thread = Thread(target=read_from_tuntap,
-                             args=(self.dev, self.queue))
-
     def setup(self):
-        """Call this once the TUN device is configured, to start reading."""
-        self.thread.daemon = True
-        self.thread.start()
+        pass
 
     def send_packet(self, packet):
-        self.dev.write(packet)
+        os.write(self.dev, packet)
 
     def get_packet(self, timeout=None):
-        if timeout is None:
-            return self.queue.get(True)
-        else:
-            try:
-                return self.queue.get(False, timeout)
-            except evergreen.queue.Empty:
-                return None
+        # The timeout must be a float.
+        if timeout is not None and not isinstance(timeout, float):
+            timeout = float(timeout)
+
+        # We keep looping until we read something.
+        try:
+            rlist, wlist, xlist = select.select([self.dev], [], [], timeout)
+        except select.error:
+            return None
+
+        if len(rlist) > 0 and rlist[0] == self.dev:
+            packet = os.read(self.dev, 65535)
+            return packet
+
+        # If we get here, it's because we timed out.
+        return None
 
     def close(self):
         os.close(self.dev)

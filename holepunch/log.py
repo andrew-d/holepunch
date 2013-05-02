@@ -6,11 +6,18 @@ Thanks to the Tornado web framework for much of this code.
 import sys
 import time
 import logging
+import threading
 
 try:
     import curses
 except ImportError:
     curses = None
+
+
+class ThreadInfoFilter(logging.Filter):
+    def filter(self, record):
+        record.thread_name = threading.current_thread().name
+        return record
 
 
 def _safe_unicode(s):
@@ -68,7 +75,7 @@ class CustomFormatter(logging.Formatter):
             "%y/%m/%d %H:%M:%S", self.converter(record.created))
 
         # The actual logging format (prefix)
-        prefix = '[%(levelname)1.1s %(asctime)s %(module)s:%(lineno)d]' % \
+        prefix = '[%(levelname)1.1s %(asctime)s %(thread_name)s %(module)s:%(lineno)d]' % \
             record.__dict__
 
         # Colorize prefix, if we support it.
@@ -105,4 +112,5 @@ def setup_logging(level=None):
     log.setLevel(level)
     stream = logging.StreamHandler()
     stream.setFormatter(CustomFormatter())
+    stream.addFilter(ThreadInfoFilter())
     log.addHandler(stream)
