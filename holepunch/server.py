@@ -10,11 +10,12 @@ import hmac
 import socket
 import hashlib
 import logging
-import threading
+
+import evergreen
 
 from . import transports
 from .transports.base import SocketDisconnected
-from .common import forward_packets
+from .common import forward_packets, wait_for_multiple_tasks
 
 
 log = logging.getLogger(__name__)
@@ -22,25 +23,24 @@ log = logging.getLogger(__name__)
 
 # Architecture:
 # -------------
-# We start a new thread for each transport method.  These threads will each
+# We start a new task for each transport method.  These tasks will each
 # call the (blocking) accept_client() method on the transport.  Each time this
 # method returns, it will return a client connection, in the form of an object
-# implementing ClientBase.  The server will then spawn another thread that will
+# implementing ClientBase.  The server will then spawn another task that will
 # read packets from this client and forward them to the TUN device.
 # Furthermore, the client connection will be added to a global list.  This list
-# will be used in a final thread that will forward all incoming packets from
+# will be used in a final task that will forward all incoming packets from
 # the TUN device to all connected clients.  Note that this is somewhat
-# inefficient, but we don't want to do routing here.  In summary, the threads
+# inefficient, but we don't want to do routing here.  In summary, the tasks
 # we use are:
-#   - 1 thread for each transport method (currently 4)
-#   - 1 thread that will forward any packets from the TUN device to all
+#   - 1 task for each transport method (currently 4)
+#   - 1 task that will forward any packets from the TUN device to all
 #     connected clients
-#   - 1 thread for each individual client that is connected, that will forward
+#   - 1 task for each individual client that is connected, that will forward
 #     packets from the client to the TUN device
-#   - The main thread, which will wait for all threads to exit.  Note that we
-#     do this because Python will only deliver exceptions to the main thread,
-#     so we don't want to block this thread for too long.
-# Total threads: 6 + number of connected clients
+#   - The main task, which will wait for all tasks to exit.  Note that we
+#     do this to catch signals.
+# Total tasks: 6 + number of connected clients
 
 
 def run(device, arguments):
@@ -54,33 +54,21 @@ def run(device, arguments):
     pwd = arguments['--password'] or ''
 
     # Start methods.
-    threads = []
+    tasks = []
     for method in methods:
         log.info("Starting transport %s...", method)
         mod = getattr(transports, method)
 
-        t = threading.Thread(target=mod.listen,
-                             args=(new_client, device, pwd),
-                             name="transport_%s" % (method,))
-        t.daemon = True
+        t = evergreen.tasks.Task(mod.listen, name='transport_%s' % (method,),
+                                 args=(new_client, device, pwd)
+                                 )
         t.start()
-        threads.append(t)
+        tasks.append(t)
 
-    # Wait for all threads
+    # Wait for all tasks
     log.info("Waiting for all transports to finish...")
     try:
-        while True:
-            if len(threads) == 0:
-                break
-
-            # Wait for the thread.
-            t = threads[0]
-            t.join(2.0)
-
-            # If it has exited, remove it from our list.
-            if not t.is_alive():
-                log.debug("Thread %s has exited", t.name)
-                threads.remove(t)
+        wait_for_multiple_tasks(tasks)
     except KeyboardInterrupt:
         pass
 
@@ -94,12 +82,12 @@ def const_compare(a, b):
 
     res = 0
     for x, y in zip(a, b):
-        res |= x ^ y
+        res |= ord(x) ^ ord(y)
 
     return res == 0
 
 
-def new_client(conn, tun, pwd):
+def new_client(conn, addr, tun, pwd):
     # Send the challenge.
     nonce = os.urandom(32)
 
@@ -133,13 +121,7 @@ def new_client(conn, tun, pwd):
     log.info("Client successfully authenticated")
     conn.send_packet("success")
 
-    # Spawn a new thread that forwards from the tun device --> client, and then
-    # we become a thread that forwards from the client to the tun device.
-    t = threading.Thread(target=forward_packets,
-                         name="tun_to_conn",
-                         args=(tun, conn, "tun", "client")
-                         )
-    t.daemon = True
-    t.start()
-
-    forward_packets(conn, tun, "client", "tun")
+    # Spawn a new task that forwards from the tun device --> client, and then
+    # we become a task that forwards from the client to the tun device.
+    evergreen.tasks.spawn(forward_packets, tun, conn)
+    forward_packets(conn, tun)

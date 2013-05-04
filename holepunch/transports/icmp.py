@@ -1,5 +1,11 @@
+import logging
+
+
+log = logging.getLogger(__name__)
+
+
 def connect(address):
     pass
 
 def listen(callback, *args, **kwargs):
-    pass
+    log.debug("In ICMP listen...")

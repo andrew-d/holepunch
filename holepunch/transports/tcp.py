@@ -1,82 +1,16 @@
 import time
 import select
-import socket
 import struct
 import logging
-import threading
+
+import evergreen
+from evergreen.lib import socket
 
 from .base import ClientBase, ConnectionError, SocketDisconnected
 
 
 log = logging.getLogger(__name__)
 PORT = 44460
-
-
-class TimeoutSocketWrapper(object):
-    def __init__(self, socket):
-        self.sock = socket
-
-    def read_bytes(self, num_bytes, timeout=None):
-        # Default to infinite timeout.
-        if timeout is None:
-            timeout = float('inf')
-
-        return self._internal_read(num_bytes, timeout)
-
-    def _internal_read(self, length, timeout):
-        # Firstly, get the absolute timeout.
-        abs_timeout = time.time() + timeout
-
-        # Now, loop while we still have time left.
-        chunks = []
-        while True:
-            # If we have no more length to read, we're done.
-            if length == 0:
-                break
-
-            # If we're past the absolute time, we're done.
-            now = time.time()
-            if now > abs_timeout:
-                log.debug("Read timed out")
-                return None
-
-            # Wait for an available read for the remainder of the time.  Note
-            # that the select() call can't take an infinite value, so we
-            # special-case this to set the timeout to None, representing the
-            # infinite value.
-            if abs_timeout == float('inf'):
-                time_left = None
-            else:
-                time_left = abs_timeout - now
-
-            rlist, wlist, xlist = select.select([self.sock], [], [],
-                                                time_left)
-
-            # Check if we actually got some data.  If not, we timed out.  Note
-            # that we don't catch that case - we just return to the top of the
-            # loop and let the code there handle it.
-            if len(rlist) > 0:
-                c = self.sock.recv(length)
-                if len(c) == 0:
-                    log.warn("Socket read returned None!")
-                    raise SocketDisconnected()
-
-                chunks.append(c)
-                length -= len(c)
-
-        return b''.join(chunks)
-
-    def sendall(self, *args, **kwargs):
-        return self.sock.sendall(*args, **kwargs)
-
-    def send(self, *args, **kwargs):
-        return self.sock.send(*args, **kwargs)
-
-    def recv(self, *args, **kwargs):
-        return self.sock.recv(*args, **kwargs)
-
-    def close(self):
-        self.sock.close()
 
 
 class TCPClient(ClientBase):
@@ -112,23 +46,37 @@ class TCPClient(ClientBase):
         return klass(s)
 
     def __init__(self, sock):
-        self.sock = TimeoutSocketWrapper(sock)
+        self.sock = sock
+
+    def _read_all(self, length):
+        chunks = []
+        while length > 0:
+            d = self.sock.recv(length)
+            if d is None:
+                return None
+            chunks.append(d)
+            length -= len(d)
+
+        return b''.join(chunks)
 
     def get_packet(self, timeout=None):
-        # Read the length
-        lengthb = self.sock.read_bytes(2, timeout=timeout)
-        if lengthb is None:
-            log.warn("Failed reading length...")
-            return None
+        with evergreen.timeout.Timeout(timeout, exception=False):
+            # Read the length
+            lengthb = self._read_all(2)
+            if lengthb is None:
+                log.warn("Failed reading length...")
+                return None
 
-        # Get the length as an integer, then read the data.
-        length = struct.unpack("!H", lengthb)[0]
-        packet = self.sock.read_bytes(length, timeout=timeout)
-        if packet is None:
-            log.warn("Failed reading packet of length %d...", length)
-            return None
+            # Get the length as an integer, then read the data.
+            length = struct.unpack("!H", lengthb)[0]
+            packet = self._read_all(length)
+            if packet is None:
+                log.warn("Failed reading packet of length %d...", length)
+                return None
 
-        return packet
+            return packet
+
+        return None
 
     def send_packet(self, packet):
         length = struct.pack('!H', len(packet))
@@ -150,6 +98,15 @@ def connect(server_addr):
     except ConnectionError:
         log.debug("Could not connect with TCP")
         return None
+
+
+# This trampoline ensures that the client connection is closed after each
+# task is finished with it.
+def _new_client_trampoline(callback, client, addr, *args, **kwargs):
+    try:
+        callback(client, addr, *args, **kwargs)
+    finally:
+        client.close()
 
 
 def listen(callback, *args, **kwargs):
@@ -184,24 +141,14 @@ def listen(callback, *args, **kwargs):
 
     log.info("Started listening on: %s:%d", *sa)
 
-    i = 0
-    threads = []
+    try:
+        while True:
+            conn, addr = s.accept()
+            client = TCPClient(conn)
+            log.info("Client connected: %s:%d", addr[0], addr[1])
 
-    while True:
-        conn, addr = s.accept()
-        client = TCPClient(conn)
-        log.info("Client connected: %s:%d", addr[0], addr[1])
-        i += 1
-
-        # Spawn a new thread
-        thread_args = list(args)
-        thread_args.insert(0, client)
-
-        t = threading.Thread(target=callback,
-                             name="tcp_client_%d" % (i,),
-                             args=thread_args,
-                             kwargs=kwargs)
-
-        t.daemon = True
-        t.start()
-        threads.append(t)
+            # Spawn a new task to process this client.
+            evergreen.tasks.spawn(_new_client_trampoline, callback, client, addr,
+                                  *args, **kwargs)
+    finally:
+        s.close()

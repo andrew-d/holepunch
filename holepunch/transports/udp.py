@@ -1,8 +1,10 @@
 import time
 import struct
-import socket
 import logging
 import threading
+
+import evergreen
+from evergreen.lib import socket
 
 from ..six.moves import queue
 from .base import ClientBase, ConnectionError, SocketDisconnected
@@ -184,9 +186,17 @@ class UDPClient(ClientBase):
         self.addr = addr
 
     def get_packet(self, timeout=None):
-        # Just read and return a whole packet.  Reliability is at another level
-        data, addr = self.sock.recvfrom(65535)
-        return data
+        with evergreen.timeout.Timeout(timeout, exception=False):
+            # Just read and return a whole packet. Reliability is at another level.
+            data, addr = self.sock.recvfrom(65535)
+            if addr != self.addr:
+                # TODO: does this matter?  discard?
+                log.warn("Address is not the same as stored: %r != %r", addr,
+                         self.addr)
+
+            return data
+
+        return None
 
     def send_packet(self, packet_data):
         self.sock.sendto(packet_data, self.addr)
@@ -199,7 +209,6 @@ class UDPClient(ClientBase):
         return "UDP"
 
 
-
 def connect(address):
     log.info("Attempting to create UDP transport...")
     try:
@@ -210,4 +219,4 @@ def connect(address):
 
 
 def listen(callback, *args, **kwargs):
-    pass
+    log.debug("In UDP listen...")

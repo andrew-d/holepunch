@@ -6,7 +6,8 @@ Thanks to the Tornado web framework for much of this code.
 import sys
 import time
 import logging
-import threading
+
+import evergreen
 
 try:
     import curses
@@ -14,9 +15,10 @@ except ImportError:
     curses = None
 
 
-class ThreadInfoFilter(logging.Filter):
+class TaskInfoFilter(logging.Filter):
     def filter(self, record):
-        record.thread_name = threading.current_thread().name
+        task = evergreen.tasks.get_current()
+        record.task_name = getattr(task, 'name', 'main')
         return record
 
 
@@ -75,8 +77,8 @@ class CustomFormatter(logging.Formatter):
             "%y/%m/%d %H:%M:%S", self.converter(record.created))
 
         # The actual logging format (prefix)
-        prefix = '[%(levelname)1.1s %(asctime)s %(thread_name)s %(module)s:%(lineno)d]' % \
-            record.__dict__
+        prefix = '[%(levelname)1.1s %(asctime)s %(task_name)s ' \
+                 '%(module)s:%(lineno)d]' % record.__dict__
 
         # Colorize prefix, if we support it.
         if self._color:
@@ -112,5 +114,5 @@ def setup_logging(level=None):
     log.setLevel(level)
     stream = logging.StreamHandler()
     stream.setFormatter(CustomFormatter())
-    stream.addFilter(ThreadInfoFilter())
+    stream.addFilter(TaskInfoFilter())
     log.addHandler(stream)

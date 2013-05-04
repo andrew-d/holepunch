@@ -7,11 +7,12 @@ Options:
 import hmac
 import hashlib
 import logging
-import threading
 
+import evergreen
 
 from . import transports
-from .common import forward_packets
+from .common import forward_packets, wait_for_multiple_tasks
+from .config import set_route_gateway, get_gateway_for_ip
 
 
 log = logging.getLogger(__name__)
@@ -19,14 +20,15 @@ log = logging.getLogger(__name__)
 
 # Architecture:
 # -------------
-# Unlike the server, the client is pretty simple :-)  We start two threads -
+# Unlike the server, the client is pretty simple :-)  We start two tasks -
 # one that will forward packets from the TUN device to the server, and then one
-# to forward from the server to the TUN device.  Our main thread will then wait
-# for these two threads to exit (see server.py for comment regarding signals).
+# to forward from the server to the TUN device.  Our main task will then wait
+# for these two tasks to exit (see server.py for comment regarding signals).
 
 
 def run(device, arguments):
-    log.debug("Holepunching with server '%s'...", arguments['<address>'])
+    address = arguments['<address>']
+    log.debug("Holepunching with server '%s'...", address)
 
     # Try each method of connection.
     methods = arguments['--methods']
@@ -41,7 +43,7 @@ def run(device, arguments):
         mod = getattr(transports, method)
 
         # Try and create the transport.
-        transport = mod.connect(arguments['<address>'])
+        transport = mod.connect(address)
         if not transport:
             continue
 
@@ -57,39 +59,30 @@ def run(device, arguments):
         log.error("Did not find a transport that works!")
         return
 
+    # Get the existing route to our holepunch server.
+    existing_route = get_gateway_for_ip(address)
+    if existing_route is None:
+        log.warn("Cannot set up routes - you should do this manually!  Set:\n"
+                 "- A route for 0.0.0.0/0 through 10.93.0.1\n"
+                 "- A route for %s through your default gateway", address)
+    else:
+        # Set one route that forwards all traffic (for the whole internet)
+        # through our gateway IP.
+        set_route_gateway(device.name, '0.0.0.0/0', '10.93.0.1')
+
+        # Set another route that forwards all traffic for our actual gateway
+        # through the previous default route.
+        set_route_gateway(device.name, address, existing_route)
+
     # Forward packets.
-    t1 = threading.Thread(target=forward_packets,
-                          name="server_to_tun",
-                          args=(conn, device))
-    t2 = threading.Thread(target=forward_packets,
-                          name="tun_to_server",
-                          args=(device, conn))
+    t1 = evergreen.tasks.spawn(forward_packets, conn, device)
+    t2 = evergreen.tasks.spawn(forward_packets, device, conn)
 
-    # Start threads
-    log.info("Starting forwarding threads...")
-    t1.daemon = True
-    t2.daemon = True
-    t1.start()
-    t2.start()
-
-    # Wait for all threads.  Note that we have a timeout here so we don't stop
+    # Wait for all tasks.  Note that we have a timeout here so we don't stop
     # signals from being processed.
-    log.info("Waiting for forwarding threads to finish...")
-    threads = [t1, t2]
-
+    log.info("Waiting for forwarding tasks to finish...")
     try:
-        while True:
-            if len(threads) == 0:
-                break
-
-            # Wait for the thread.
-            t = threads[0]
-            t.join(2.0)
-
-            # If it has exited, remove it from our list.
-            if not t.is_alive():
-                log.debug("Thread %s has exited", t.name)
-                threads.remove(t)
+        wait_for_multiple_tasks([t1, t2])
     except KeyboardInterrupt:
         pass
 
