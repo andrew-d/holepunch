@@ -107,44 +107,73 @@ type GenericServer interface {
 }
 
 // Global options
-var ipaddr = flag.String("ip", "", "the IP address of the TUN/TAP device")
-var netmask = flag.String("netmask", "255.255.0.0", "the netmask of the TUN/TAP device")
-var password = flag.String("pass", "insecure", "password for authentication")
+var ipaddr string
+var netmask string
+var password string
+var is_client bool
 
 // Client options
-var is_client = flag.Bool("c", false, "operate in client mode")
-var method = flag.String("m", "all", "methods to try, as comma-seperated list (tcp/udp/icmp/dns/all)")
-var server_addr = flag.String("server", "10.93.0.1", "ip address of the server")
+var method string
+var server_addr string
 
 // Server options
-var is_server = flag.Bool("s", false, "operate in server mode")
+// None!
 
 // ============================================================================
 // =================================== MAIN ===================================
 // ============================================================================
 
-func usage() {
-    fmt.Fprintf(os.Stderr, "Usage: %s [options] server\n", os.Args[0])
-    flag.PrintDefaults()
-    os.Exit(2)
-}
-
 func main() {
-    // Start by printing a header and parsing flags.
-    flag.Usage = usage
-    flag.Parse()
+    // Check subcommand.
+    if len(os.Args) < 2 {
+        fmt.Println("Usage:")
+        fmt.Println("  holepunch (server|client) [options]")
+        fmt.Println("")
+        os.Exit(1)
+    }
+    cmd := os.Args[1]
+    flags := flag.NewFlagSet(cmd, flag.ExitOnError)
+
+    flags.StringVar(&ipaddr, "ip", "", "the IP address of the TUN/TAP device")
+    flags.StringVar(&netmask, "netmask", "255.255.0.0", "the netmask of the TUN/TAP device")
+    flags.StringVar(&password, "pass", "insecure", "password for authentication")
+
+    switch cmd {
+    case "client":
+        // Client.
+        is_client = true
+        flags.StringVar(&method, "m", "all", "methods to try, as comma-seperated list (tcp/udp/icmp/dns/all)")
+        flags.StringVar(&server_addr, "server", "10.93.0.1", "ip address of the server")
+
+    case "server":
+        // Server
+        is_client = false
+
+    default:
+        fmt.Fprintf(os.Stderr, "Usage:\n")
+        fmt.Fprintf(os.Stderr, "  holepunch (server|client) [options]\n\n")
+        os.Exit(1)
+    }
+
+    // Parse flags.
+    flags.Parse(os.Args[2:])
+
+    var holepunch_server string
+    if is_client {
+        // Verify we have a server address.
+        args := flags.Args()
+        if len(args) < 1 {
+            fmt.Fprintf(os.Stderr, "No server address given!\n\n")
+            fmt.Fprintf(os.Stderr, "Usage:\n")
+            fmt.Fprintf(os.Stderr, "  holepunch client [options] server_addr\n\n")
+            os.Exit(1)
+        } else {
+            holepunch_server = args[0]
+        }
+    }
 
     // Seed PRNG.
     rand.Seed(time.Now().UTC().UnixNano())
-
-    // Check client / server.
-    if !*is_client && !*is_server {
-        fmt.Fprintf(os.Stderr, "Did not specify client or server!\n")
-        os.Exit(1)
-    } else if *is_client && *is_server {
-        fmt.Fprintf(os.Stderr, "Cannot specify both client and server mode!\n")
-        os.Exit(1)
-    }
 
     log.Println("Opening TUN/TAP device...")
     tuntap, err := tuntap.GetTuntapDevice()
@@ -155,14 +184,14 @@ func main() {
 
     // Configure the device.
     log.Println("Configuring TUN/TAP device...")
-    configureTuntap(*is_client, tuntap.Name())
+    configureTuntap(is_client, tuntap.Name())
 
     // Start reading from the TUN/TAP device.
     tuntap.Start()
 
     // Kickoff the client or server.
-    if *is_client {
-        runClient(tuntap)
+    if is_client {
+        runClient(tuntap, holepunch_server)
     } else {
         runServer(tuntap)
     }
@@ -173,20 +202,20 @@ func main() {
 func configureTuntap(is_client bool, devName string) {
     // Configure the TUN/TAP device.
     // Set default IP address, if needed.
-    if len(*ipaddr) == 0 {
+    if len(ipaddr) == 0 {
         if is_client {
-            *ipaddr = "10.93.0.2"
+            ipaddr = "10.93.0.2"
         } else {
-            *ipaddr = "10.93.0.1"
+            ipaddr = "10.93.0.1"
         }
     }
 
     // Need to run: ifconfig tunX 10.0.0.1 10.0.0.1 netmask 255.255.255.0 up
     var cmd *exec.Cmd
     if is_client {
-        cmd = exec.Command("/sbin/ifconfig", devName, *ipaddr, *server_addr, "netmask", *netmask, "up")
+        cmd = exec.Command("/sbin/ifconfig", devName, ipaddr, server_addr, "netmask", netmask, "up")
     } else {
-        cmd = exec.Command("/sbin/ifconfig", devName, *ipaddr, *ipaddr, "netmask", *netmask, "up")
+        cmd = exec.Command("/sbin/ifconfig", devName, ipaddr, ipaddr, "netmask", netmask, "up")
     }
 
     out, err := cmd.Output()
@@ -266,7 +295,7 @@ func handleNewClient(tuntap tuntap.Device, client *PacketClient) {
     })()
 
     // Calculate the proper response to the challenge.
-    hm := hmac.New(sha256.New, []byte(*password))
+    hm := hmac.New(sha256.New, []byte(password))
     _, err := hm.Write(nonce)
     if err != nil {
         log.Printf("Error computing HMAC: %s\n", err)
@@ -318,17 +347,11 @@ func handleNewClient(tuntap tuntap.Device, client *PacketClient) {
 // ================================== CLIENT ==================================
 // ============================================================================
 
-func runClient(tuntap tuntap.Device) {
-    // Verify we have a server address.
-    args := flag.Args()
-    if len(args) < 1 {
-        fmt.Fprintf(os.Stderr, "No server address given!\n")
-        os.Exit(1)
-    }
-    log.Printf("Holepunching with server %s...\n", args[0])
+func runClient(tuntap tuntap.Device, hpserver string) {
+    log.Printf("Holepunching with server %s...\n", hpserver)
 
     // Determine the method.
-    var methods = strings.Split(*method, ",")
+    var methods = strings.Split(method, ",")
     if len(methods) == 1 && methods[0] == "all" {
         methods = []string{"tcp", "udp", "icmp", "dns"}
     }
@@ -342,7 +365,7 @@ func runClient(tuntap tuntap.Device) {
         switch methods[i] {
         case "tcp":
             log.Printf("Trying TCP connection...")
-            curr, err = NewTCPPacketClient(args[0])
+            curr, err = NewTCPPacketClient(hpserver)
         case "udp":
             log.Printf("Trying UDP connection...")
         case "icmp":
@@ -371,7 +394,7 @@ func runClient(tuntap tuntap.Device) {
         }
 
         // Compute the HMAC of the challenge.
-        hm := hmac.New(sha256.New, []byte(*password))
+        hm := hmac.New(sha256.New, []byte(password))
         _, err = hm.Write(challenge)
         if err != nil {
             log.Printf("Error computing HMAC: %s\n", err)

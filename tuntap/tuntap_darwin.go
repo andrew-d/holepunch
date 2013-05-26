@@ -23,7 +23,7 @@ func GetTuntapDevice() (Device, error) {
         return nil, err
     }
 
-    tuntapDev, err := os.OpenFile("/dev/"+name, os.O_RDWR, 0666)
+    tuntapDev, err := os.OpenFile("/dev/" + name, os.O_RDWR, 0666)
     if err != nil {
         log.Printf("Error opening file: %s\n", err)
         return nil, err
@@ -45,7 +45,7 @@ func (t *DarwinTunTap) Start() {
     go packetReader(t)
 }
 
-func fdSet(fd_set *syscall.FdSet, fd uintptr) {
+func FD_SET(fd int, p *syscall.FdSet) {
     // From the header files:
     //
     // #define  __DARWIN_NBBY       8               /* bits in a byte */
@@ -55,46 +55,29 @@ func fdSet(fd_set *syscall.FdSet, fd uintptr) {
     //      int __fd = (n);
     //      ((p)->fds_bits[__fd/__DARWIN_NFDBITS] |= (1<<(__fd % __DARWIN_NFDBITS)));
     // } while(0)
-
-    // The index is our file descriptor divided by (32 * 8).
-    idx := fd / (32 * 8)
-
-    // The bit to set is the remainder from our file descriptor / (32 * 8)
-    rem := fd % (32 * 8)
-
-    fd_set.Bits[idx] |= (1 << rem)
+    n, k := fd / 32, fd % 32
+    p.Bits[n] |= (1 << uint32(k))
 }
 
-func fdClear(fd_set *syscall.FdSet, fd uintptr) {
+func FD_CLEAR(fd int, p *syscall.FdSet) {
     // Read above for information.
-    idx := fd / (32 * 8)
-    rem := fd % (32 * 8)
-    fd_set.Bits[idx] &= ^(1 << rem)
+    n, k := fd / 32, fd % 32
+    p.Bits[n] &= ^(1 << uint32(k))
 }
 
 func packetReader(t *DarwinTunTap) {
-    var n int
-    var err error
-    var fds syscall.FdSet
     packet := make([]byte, 65535)
-
-    // Set value in fds.
-    fdSet(&fds, t.file.Fd())
+    fds := new(syscall.FdSet)
+    fd := int(t.file.Fd())
+    FD_SET(fd, fds)
 
     for {
         // On Mac OS X, reading from the tun/tap device will do strange
-        // things.  Use syscall.Select?
-
-        // Wait forever for data to be ready.
-        // FIXME: This doesn't work...
-        //err = syscall.Select(1, &fds, nil, nil, nil)
-        //if err != nil {
-        //    log.Printf("Error in select() call: %s\n", err)
-        //    continue
-        //}
+        // things.  Use syscall.Select.
+        syscall.Select(fd + 1, fds, nil, nil, nil)
 
         // Actually read.
-        n, err = t.file.Read(packet)
+        n, err := t.file.Read(packet)
         if err == io.EOF {
             t.eof <- true
             return
@@ -103,7 +86,6 @@ func packetReader(t *DarwinTunTap) {
             <-time.After(1 * time.Second)
             continue
         }
-        log.Printf("  got %d\n", n)
 
         t.packets <- packet[0:n]
     }
