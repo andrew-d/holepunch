@@ -133,6 +133,10 @@ func startTcpClientRecv(tcpClient *TCPPacketClient) {
         // loop around to the top again, and continue reading packets.
         tcpClient.incoming <- pkt
     }
+
+    // TODO: we should have some way of signalling that we're done here - and
+    // perhaps some other way of manually breaking out of the loop.  Perhaps a
+    // 'chan bool' that we send to when we hit here?
 }
 
 func (t *TCPPacketClient) SendPacket(pkt []byte) error {

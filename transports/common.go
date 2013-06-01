@@ -9,7 +9,9 @@ type PacketClient interface {
 
     // Get the channel to use to receive packets.  This is used, rather than
     // a simple "read" function, since it allows us to use the select{}
-    // primitive to do multiple things in one loop.
+    // primitive to do multiple things in one loop.  Also, we apparently
+    // can't have a variable requirement in an interface, so we just have this
+    // function that returns the underlying variable.
     PacketChannel() chan []byte
 
     // Close this transport down.

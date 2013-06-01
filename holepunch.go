@@ -274,12 +274,15 @@ func handleNewClient(tuntap tuntap.Device, client *transports.PacketClient) {
         log.Printf("Error computing HMAC: %s\n", err)
         return
     }
-    expected := hex.EncodeToString(hm.Sum(nil))
+    expected := make([]byte, 64)
+    hex.Encode(expected, hm.Sum(nil))
 
     select {
     case resp := <-res:
-        // If authentication failed...
-        if string(resp) != expected {
+        // Note that it is IMPORTANT we use hmac.Equal here, to avoid leaking
+        // timing information.  Then, if authentication fails, we just outright
+        // exit, and let the deferred close handle things.
+        if !hmac.Equal(resp, expected) {
             log.Printf("Authentication failure")
             (*client).SendPacket([]byte("failure"))
             return
