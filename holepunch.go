@@ -262,10 +262,6 @@ func handleNewClient(tuntap tuntap.Device, client *transports.PacketClient) {
     //  - Successful authentication
     //  - Unsuccessful authentication
     //  - Timeout
-    res := make(chan []byte)
-    go (func() {
-        res <- (<-(*client).PacketChannel())
-    })()
 
     // Calculate the proper response to the challenge.
     hm := hmac.New(sha256.New, []byte(password))
@@ -278,7 +274,7 @@ func handleNewClient(tuntap tuntap.Device, client *transports.PacketClient) {
     hex.Encode(expected, hm.Sum(nil))
 
     select {
-    case resp := <-res:
+    case resp := <-(*client).PacketChannel():
         // Note that it is IMPORTANT we use hmac.Equal here, to avoid leaking
         // timing information.  Then, if authentication fails, we just outright
         // exit, and let the deferred close handle things.
