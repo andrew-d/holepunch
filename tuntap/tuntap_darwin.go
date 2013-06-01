@@ -23,7 +23,7 @@ func GetTuntapDevice() (Device, error) {
         return nil, err
     }
 
-    tuntapDev, err := os.OpenFile("/dev/" + name, os.O_RDWR, 0666)
+    tuntapDev, err := os.OpenFile("/dev/"+name, os.O_RDWR, 0666)
     if err != nil {
         log.Printf("Error opening file: %s\n", err)
         return nil, err
@@ -55,13 +55,13 @@ func FD_SET(fd int, p *syscall.FdSet) {
     //      int __fd = (n);
     //      ((p)->fds_bits[__fd/__DARWIN_NFDBITS] |= (1<<(__fd % __DARWIN_NFDBITS)));
     // } while(0)
-    n, k := fd / 32, fd % 32
+    n, k := fd/32, fd%32
     p.Bits[n] |= (1 << uint32(k))
 }
 
 func FD_CLEAR(fd int, p *syscall.FdSet) {
     // Read above for information.
-    n, k := fd / 32, fd % 32
+    n, k := fd/32, fd%32
     p.Bits[n] &= ^(1 << uint32(k))
 }
 
@@ -74,7 +74,7 @@ func packetReader(t *DarwinTunTap) {
     for {
         // On Mac OS X, reading from the tun/tap device will do strange
         // things.  Use syscall.Select.
-        syscall.Select(fd + 1, fds, nil, nil, nil)
+        syscall.Select(fd+1, fds, nil, nil, nil)
 
         // Actually read.
         n, err := t.file.Read(packet)
@@ -83,7 +83,10 @@ func packetReader(t *DarwinTunTap) {
             return
         } else if err != nil {
             log.Printf("Error reading from tuntap: %s\n", err)
-            <-time.After(1 * time.Second)
+
+            // This wait is to stop us from getting stuck in an infinite loop
+            // of reads that all error, and consuming 100% CPU forever.
+            <-time.After(100 * time.Millisecond)
             continue
         }
 

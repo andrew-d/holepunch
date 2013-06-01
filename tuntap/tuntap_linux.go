@@ -64,8 +64,6 @@ func packetReader(t *LinuxTunTap) {
     packet := make([]byte, 65535)
 
     for {
-        // On Mac OS X, reading from the tun/tap device will do strange
-        // things.  Use syscall.Select?
         n, err = t.file.Read(packet)
         if err == io.EOF || n == 0 {
             log.Printf("%d / %s", n, err)

@@ -4,19 +4,17 @@ import (
     "bytes"
     "crypto/hmac"
     "crypto/sha256"
-    "encoding/binary"
     "encoding/hex"
     "flag"
     "fmt"
-    "io"
     "log"
     "math/rand"
-    "net"
     "os"
     "os/exec"
     "strings"
     "time"
 
+    "github.com/andrew-d/holepunch/transports"
     "github.com/andrew-d/holepunch/tuntap"
 )
 
@@ -80,31 +78,6 @@ type ServerAuthenticationResult struct {
  *    the length, since TCP is a stream-oriented protocol, and UDP needs to
  *    include a header for reliable delivery).
  */
-
-// This interface represents a single connected client.
-type PacketClient interface {
-    // Send a single packet, error if necessary.  Will block for some time if
-    // no packets can currently be sent - e.g. if the send window is full on
-    // some transports.
-    SendPacket(pkt []byte) error
-
-    // Get a single packet, returning it and an error.  Will block for some
-    // time if no packet is available, and will then return an error if it
-    // times out.
-    PacketChannel() chan []byte
-
-    // Close this transport down.
-    Close()
-
-    // This can return whatever - mostly used for helpful debugging.
-    Describe() string
-}
-
-// This interface represents a server - something that will accept clients.
-type GenericServer interface {
-    // Accept a single client and return it.
-    AcceptChannel() chan PacketClient
-}
 
 // Global options
 var ipaddr string
@@ -239,7 +212,7 @@ func runServer(tuntap tuntap.Device) {
     // then handle the connection.
 
     log.Println("Starting TCP server...")
-    tcpServer, err := NewTCPPacketServer("")
+    tcpServer, err := transports.NewTCPPacketServer("")
     if err != nil {
         log.Printf("Error creating TCP server: %s\n", err)
     } else {
@@ -251,7 +224,7 @@ func runServer(tuntap tuntap.Device) {
     <-ch
 }
 
-func startPacketServer(tuntap tuntap.Device, server GenericServer, method string) {
+func startPacketServer(tuntap tuntap.Device, server transports.GenericServer, method string) {
     go (func() {
         for {
             client := <-server.AcceptChannel()
@@ -275,7 +248,7 @@ func randomBytes(l int) []byte {
 }
 
 // Authenticate and then handle the client.
-func handleNewClient(tuntap tuntap.Device, client *PacketClient) {
+func handleNewClient(tuntap tuntap.Device, client *transports.PacketClient) {
     // At the end of this function, we're to close the client.
     defer (*client).Close()
 
@@ -357,15 +330,15 @@ func runClient(tuntap tuntap.Device, hpserver string) {
     }
 
     // Try each method.
-    var client *PacketClient = nil
+    var client *transports.PacketClient = nil
     for i := range methods {
-        var curr PacketClient
+        var curr transports.PacketClient
         var err error
 
         switch methods[i] {
         case "tcp":
             log.Printf("Trying TCP connection...")
-            curr, err = NewTCPPacketClient(hpserver)
+            curr, err = transports.NewTCPPacketClient(hpserver)
         case "udp":
             log.Printf("Trying UDP connection...")
         case "icmp":
@@ -452,166 +425,4 @@ func runClient(tuntap tuntap.Device, hpserver string) {
             return
         }
     }
-}
-
-// ============================================================================
-// ============================== TCP TRANSPORT ===============================
-// ============================================================================
-
-type TCPPacketClient struct {
-    host     string
-    conn     *net.Conn
-    incoming chan []byte
-}
-
-// TODO: single struct with flag for which?
-type TCPPacketServer struct {
-    host     string
-    listener *net.Listener
-    incoming chan PacketClient
-}
-
-const TCP_PORT = 44461
-
-// Initializer.
-func NewTCPPacketClient(server string) (*TCPPacketClient, error) {
-    host := fmt.Sprintf("%s:%d", server, TCP_PORT)
-
-    // Connect to this client.
-    conn, err := net.Dial("tcp", host)
-    if err != nil {
-        log.Printf("Error connecting with TCP: %s", err)
-        return nil, err
-    }
-
-    ret := startClientWithConn(&conn, host)
-    return ret, nil
-}
-
-func startClientWithConn(conn *net.Conn, host string) *TCPPacketClient {
-    // Make packet channel.
-    incoming := make(chan []byte)
-
-    // Make the client.
-    ret := &TCPPacketClient{host, conn, incoming}
-
-    // This goroutine handles reads that can time out.
-    go startTcpClientRecv(ret)
-
-    // Return client
-    return ret
-}
-
-func NewTCPPacketServer(bindTo string) (*TCPPacketServer, error) {
-    host := fmt.Sprintf("%s:%d", bindTo, TCP_PORT)
-
-    listener, err := net.Listen("tcp", host)
-    if err != nil {
-        log.Printf("Error listening on %s: %s\n", host, err)
-        return nil, err
-    }
-
-    // Create server.
-    ch := make(chan PacketClient)
-    server := &TCPPacketServer{bindTo, &listener, ch}
-
-    // This goroutine will accept new clients.
-    go (func() {
-        for {
-            conn, err := listener.Accept()
-            if err != nil {
-                log.Printf("Error accepting new client: %s\n", err)
-                continue
-            }
-
-            // Create a new client.
-            client := startClientWithConn(&conn, "foobar")
-
-            // Send this client on our accepting channel.
-            ch <- client
-        }
-    })()
-
-    return server, nil
-}
-
-func (t *TCPPacketServer) AcceptChannel() chan PacketClient {
-    return t.incoming
-}
-
-func startTcpClientRecv(tcpClient *TCPPacketClient) {
-    for {
-        var length int16
-        lenb := make([]byte, 2)
-
-        // Try to read the length.  On an EOF error, we exit this
-        // goroutine, and on all other errors just keep reading lengths.
-        _, err := (*tcpClient.conn).Read(lenb)
-        if err == io.EOF {
-            log.Println("EOF received on length read")
-            break
-        } else if err != nil {
-            log.Printf("Error while reading length: %s\n", err)
-            continue
-        }
-
-        // Decode the length.
-        err = binary.Read(bytes.NewBuffer(lenb), binary.LittleEndian, &length)
-        if err != nil {
-            log.Printf("Error decoding length: %s\n", err)
-            continue
-        }
-
-        // Read this many bytes.
-        log.Printf("Reading %d bytes...\n", length)
-        pkt := make([]byte, length)
-        _, err = (*tcpClient.conn).Read(pkt)
-        if err == io.EOF {
-            log.Println("EOF received on packet read")
-            break
-        } else if err != nil {
-            log.Printf("Error while reading packet: %s\n", err)
-            continue
-        }
-
-        // Got a packet - send to our channel.  Note that we will then
-        // loop around to the top again, and continue reading packets.
-        tcpClient.incoming <- pkt
-    }
-}
-
-func (t *TCPPacketClient) SendPacket(pkt []byte) error {
-    // Encode length of packet.
-    buf := &bytes.Buffer{}
-    l := int16(len(pkt))
-    err := binary.Write(buf, binary.LittleEndian, l)
-    if err != nil {
-        return err
-    }
-
-    // Send length of packet, then the packet itself.
-    _, err = (*t.conn).Write(buf.Bytes())
-    if err != nil {
-        return err
-    }
-
-    _, err = (*t.conn).Write(pkt)
-    if err != nil {
-        return err
-    }
-
-    return nil
-}
-
-func (t *TCPPacketClient) PacketChannel() chan []byte {
-    // Read a packet, or timeout.
-    return t.incoming
-}
-
-func (t *TCPPacketClient) Describe() string {
-    return "TCPPacketClient"
-}
-
-func (t *TCPPacketClient) Close() {
-    // Do nothing.
 }
