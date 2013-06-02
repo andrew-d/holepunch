@@ -4,31 +4,50 @@ import os, sys, socket, struct, select, time
 ICMP_ECHO_REQUEST = 8 # Seems to be the same on Solaris.
 
 
+def hexdump(s):
+    ret = []
+    for ch in s:
+        ret.append(hex(ord(ch))[2:].zfill(2))
+
+    return ' '.join(ret)
+
 def checksum(source_string):
     """
     I'm not too confident that this is right but testing seems
     to suggest that it gives the same answers as in_cksum in ping.c
     """
+    print hexdump(source_string)
     sum = 0
     countTo = (len(source_string)/2)*2
     count = 0
     while count<countTo:
-        thisVal = ord(source_string[count + 1])*256 + ord(source_string[count])
+        p1 = ord(source_string[count + 1])*256
+        p2 = ord(source_string[count])
+        thisVal = p1 + p2
         sum = sum + thisVal
         sum = sum & 0xffffffff # Necessary?
+
+        print "Count = %d, sum = 0x%x, p1 = 0x%x, p2 = 0x%x" % (count, sum, p1, p2)
+
         count = count + 2
 
     if countTo<len(source_string):
         sum = sum + ord(source_string[len(source_string) - 1])
         sum = sum & 0xffffffff # Necessary?
 
+    print "intermediate sum = 0x%x" % (sum,)
+
     sum = (sum >> 16)  +  (sum & 0xffff)
     sum = sum + (sum >> 16)
+
+    print "final sum = 0x%x" % (sum,)
+
     answer = ~sum
     answer = answer & 0xffff
 
     # Swap bytes. Bugger me if I know why.
     answer = answer >> 8 | (answer << 8 & 0xff00)
+    print "answer = 0x%x" % (answer,)
 
     return answer
 

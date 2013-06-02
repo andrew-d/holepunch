@@ -1,6 +1,7 @@
 package main
 
 import (
+    "os"
     "fmt"
     "log"
     "net"
@@ -18,7 +19,14 @@ type ICMPHeader struct {
 }
 
 func main() {
-    remote := "127.0.0.1"
+    args := os.Args
+    var remote string
+    if len(args) < 2 {
+        remote = "127.0.0.1"
+    } else {
+        remote = args[1]
+    }
+    log.Printf("Pinging %s\n", remote)
 
     addr, err := net.ResolveIPAddr("ip", remote)
     if err != nil {
@@ -64,26 +72,28 @@ func main() {
     log.Println("Sending request...")
     conn.Write(arr)
 
-    b := make([]byte, 65535)
-    amt, ip, err := conn.ReadFrom(b)
-    if err != nil {
-        log.Printf("Error receiving: %s\n", err)
-        return
+    for {
+        b := make([]byte, 65535)
+        amt, ip, err := conn.ReadFrom(b)
+        if err != nil {
+            log.Printf("Error receiving: %s\n", err)
+            return
+        }
+
+        log.Printf("Got %d bytes from %s\n", amt, ip)
+        fmt.Printf("%s", hex.Dump(b[0:amt]))
+
+        // Decode to ICMP header
+        buf = bytes.NewBuffer(b[0:amt])
+        err = binary.Read(buf, binary.BigEndian, &hdr)
+        if err != nil {
+            log.Printf("Error decoding response: %s\n", err)
+            return
+        }
+
+        log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d\n\n",
+                   hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
     }
-
-    log.Printf("Got %d bytes from %s\n", amt, ip)
-    fmt.Println(hex.Dump(b[0:amt]))
-
-    // Decode to ICMP header
-    buf = bytes.NewBuffer(b[0:amt])
-    err = binary.Read(buf, binary.BigEndian, &hdr)
-    if err != nil {
-        log.Printf("Error decoding response: %s\n", err)
-        return
-    }
-
-    log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d",
-               hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
 }
 
 func getChecksum(hdr ICMPHeader, data []byte) (uint16, error) {
