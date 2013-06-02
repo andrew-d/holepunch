@@ -352,12 +352,15 @@ func runClient(tuntap tuntap.Device, hpserver string) {
         }
         log.Println("Successfully created transport, starting authentication...")
 
+        // This channel will signal after 5 seconds, at which case we timeout.
+        timeoutCh := time.After(5 * time.Second)
+
         // Read a single packet, or timeout.
         var challenge []byte
         select {
         case challenge = <-curr.PacketChannel():
             // Fall through
-        case <-time.After(5 * time.Second):
+        case <-timeoutCh:
             challenge = nil
         }
         if challenge == nil {
@@ -382,9 +385,10 @@ func runClient(tuntap tuntap.Device, hpserver string) {
         select {
         case resp = <-curr.PacketChannel():
             // Fall through
-        case <-time.After(5 * time.Second):
+        case <-timeoutCh:
             resp = nil
         }
+
         if resp == nil {
             log.Printf("Error after authentication: %s", err)
             continue

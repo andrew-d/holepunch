@@ -118,7 +118,6 @@ func startTcpClientRecv(tcpClient *TCPPacketClient) {
         }
 
         // Read this many bytes.
-        log.Printf("Reading %d bytes...\n", length)
         pkt := make([]byte, length)
         _, err = (*tcpClient.conn).Read(pkt)
         if err == io.EOF {
