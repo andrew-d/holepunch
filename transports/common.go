@@ -26,4 +26,3 @@ type GenericServer interface {
     // Accept a single client and return it.
     AcceptChannel() chan PacketClient
 }
-

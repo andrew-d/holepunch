@@ -162,7 +162,6 @@ func (t *TCPPacketClient) SendPacket(pkt []byte) error {
 }
 
 func (t *TCPPacketClient) PacketChannel() chan []byte {
-    // Read a packet, or timeout.
     return t.incoming
 }
 

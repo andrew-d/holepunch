@@ -198,6 +198,8 @@ func configureTuntap(is_client bool, devName string) {
         log.Printf("Configured successfully (output: '%s')\n", out)
     }
 
+    // TODO: we should repeatedly check until the interface is up, rather than
+    // just waiting for a given length
     <-time.After(1 * time.Second)
 }
 
@@ -220,6 +222,7 @@ func runServer(tuntap tuntap.Device) {
         log.Println("Successfully started TCP server")
     }
 
+    // TODO: better way than just blocking forever...
     ch := make(chan bool)
     <-ch
 }

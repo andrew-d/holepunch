@@ -73,7 +73,7 @@ func packetReader(t *DarwinTunTap) {
 
     for {
         // On Mac OS X, reading from the tun/tap device will do strange
-        // things.  Use syscall.Select.
+        // things.  We need to use syscall.Select.
         syscall.Select(fd+1, fds, nil, nil, nil)
 
         // Actually read.
