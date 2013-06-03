@@ -97,6 +97,9 @@ var server_addr string
 // ============================================================================
 
 func main() {
+    // Setup logging.
+    log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
     // Check subcommand.
     if len(os.Args) < 2 {
         fmt.Println("Usage:")

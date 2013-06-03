@@ -45,12 +45,17 @@ func NewICMPPacketClient(server string) (*ICMPPacketClient, error) {
     }
 
     // TODO: start the read process.
+    _ = conn
     return nil, nil
 }
 
 func (c *ICMPPacketClient) SendPacket(pkt []byte) error {
-    data := serializeICMP(pkt)
+    data, err := serializeICMP(pkt)
+    if err != nil {
+        return err
+    }
     c.conn.Write(data)
+    return nil
 }
 
 func (c *ICMPPacketClient) PacketChannel() chan []byte {
@@ -65,12 +70,12 @@ func (c *ICMPPacketClient) Close() {
     // TODO: do we need to close anything?
 }
 
-func serializeICMP(data []byte) ([]byte, err) {
+func serializeICMP(data []byte) ([]byte, error) {
     // TODO: Choose special values for our ICMP header.
     hdr := ICMPHeader{8, 0, 0, 1234, 1}
 
     // Calculate the checksum for our header.
-    chk, err := getChecksum(hdr, pkt)
+    chk, err := getChecksum(hdr, data)
     if err != nil {
         return nil, err
     }
