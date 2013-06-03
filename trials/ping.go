@@ -1,13 +1,14 @@
 package main
 
 import (
-    "os"
+    "bytes"
+    "encoding/binary"
+    "encoding/hex"
     "fmt"
     "log"
     "net"
-    "encoding/binary"
-    "encoding/hex"
-    "bytes"
+    "os"
+    "strings"
 )
 
 type ICMPHeader struct {
@@ -19,6 +20,74 @@ type ICMPHeader struct {
 }
 
 func main() {
+    /* sendPing() */
+    /* getPings() */
+
+    addrs, err := net.InterfaceAddrs()
+    if err != nil {
+        log.Printf("Error with interfaces: %s\n", err)
+    } else {
+        for i, x := range addrs {
+            log.Printf("Interface %d: %s / %s\n", i, x.String(), x.Network())
+
+            addr := x.String()
+            offset := strings.LastIndex(addr, "/")
+            if offset != -1 {
+                addr = addr[0:offset]
+            }
+
+            go getPings(addr)
+        }
+    }
+
+    ch := make(chan bool)
+    <- ch
+}
+
+func getPings(interface_addr string) {
+    addr, err := net.ResolveIPAddr("ip", interface_addr)
+    if err != nil {
+        log.Printf("Error resolving address: %s\n", err)
+        return
+    }
+
+    conn, err := net.ListenIP("ip:icmp", addr)
+    if err != nil {
+        log.Printf("Error listening: %s\n", err)
+        return
+    }
+    defer conn.Close()
+
+    log.Println("Listening for ping packets...")
+
+    buff := make([]byte, 65535)
+    hdr := &ICMPHeader{0, 0, 0, 0, 0}
+
+    for {
+        amt, ip, err := conn.ReadFrom(buff)
+        if err != nil {
+            log.Printf("Error receiving: %s\n", err)
+            return
+        }
+        data := buff[0:amt]
+
+        log.Printf("Got %d bytes from %s\n", amt, ip)
+        fmt.Printf("%s", hex.Dump(data))
+
+        // Decode to ICMP header
+        err = binary.Read(bytes.NewBuffer(data), binary.BigEndian, hdr)
+        if err != nil {
+            log.Printf("Error decoding response: %s\n", err)
+            return
+        }
+
+        log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d\n\n",
+            hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
+
+    }
+}
+
+func sendPing() {
     args := os.Args
     var remote string
     if len(args) < 2 {
@@ -46,7 +115,7 @@ func main() {
     // Make ICMP header.
     hdr := ICMPHeader{8, 0, 0, 1234, 1}
     log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d",
-               hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
+        hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
     data := []byte("foobar")
 
     // Calculate checksum over header + data
@@ -72,28 +141,26 @@ func main() {
     log.Println("Sending request...")
     conn.Write(arr)
 
-    for {
-        b := make([]byte, 65535)
-        amt, ip, err := conn.ReadFrom(b)
-        if err != nil {
-            log.Printf("Error receiving: %s\n", err)
-            return
-        }
-
-        log.Printf("Got %d bytes from %s\n", amt, ip)
-        fmt.Printf("%s", hex.Dump(b[0:amt]))
-
-        // Decode to ICMP header
-        buf = bytes.NewBuffer(b[0:amt])
-        err = binary.Read(buf, binary.BigEndian, &hdr)
-        if err != nil {
-            log.Printf("Error decoding response: %s\n", err)
-            return
-        }
-
-        log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d\n\n",
-                   hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
+    b := make([]byte, 65535)
+    amt, ip, err := conn.ReadFrom(b)
+    if err != nil {
+        log.Printf("Error receiving: %s\n", err)
+        return
     }
+
+    log.Printf("Got %d bytes from %s\n", amt, ip)
+    fmt.Printf("%s", hex.Dump(b[0:amt]))
+
+    // Decode to ICMP header
+    buf = bytes.NewBuffer(b[0:amt])
+    err = binary.Read(buf, binary.BigEndian, &hdr)
+    if err != nil {
+        log.Printf("Error decoding response: %s\n", err)
+        return
+    }
+
+    log.Printf("Type = %d, Code = %d, Checksum = %d, ID = %d, Sequence = %d\n\n",
+        hdr.Type, hdr.Code, hdr.Checksum, hdr.ID, hdr.Sequence)
 }
 
 func getChecksum(hdr ICMPHeader, data []byte) (uint16, error) {
@@ -111,14 +178,14 @@ func getChecksum(hdr ICMPHeader, data []byte) (uint16, error) {
 
     // Sum as if we were iterating over uint16's
     for i := 0; i < countTo; i += 2 {
-        p1 := (uint32)(arr[i + 1]) * 256
+        p1 := (uint32)(arr[i+1]) * 256
         p2 := (uint32)(arr[i])
         sum += p1 + p2
     }
 
     // Potentially sum the last byte
     if countTo < len(arr) {
-        sum += (uint32)(arr[len(arr) - 1])
+        sum += (uint32)(arr[len(arr)-1])
     }
 
     // Fold into 16 bits.
