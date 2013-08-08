@@ -4,6 +4,7 @@ import (
     "bytes"
     "encoding/binary"
     "net"
+    "io/ioutil"
 )
 
 type ICMPHeader struct {
@@ -15,8 +16,9 @@ type ICMPHeader struct {
 }
 
 type ICMPPacketClient struct {
-    conn     *net.IPConn
-    incoming chan []byte
+    conn            *net.IPConn
+    incoming        chan []byte
+    old_icmp_val    []byte
 }
 
 /* Architecture:
@@ -45,7 +47,15 @@ func NewICMPPacketClient(server string) (*ICMPPacketClient, error) {
     }
 
     // TODO: start the read process.
-    _ = conn
+    incoming := make(chan []byte)
+    client := &ICMPPacketClient{conn, incoming, nil}
+
+    // TODO: cross-platform!
+    icmp_val, err := ioutil.ReadFile("/proc/sys/net/ipv4/icmp_echo_ignore_all")
+    if err != nil {
+        client.old_icmp_val = icmp_val
+    }
+
     return nil, nil
 }
 
@@ -67,7 +77,15 @@ func (c *ICMPPacketClient) Describe() string {
 }
 
 func (c *ICMPPacketClient) Close() {
-    // TODO: do we need to close anything?
+    // TODO: cross-platform!
+    if c.old_icmp_val != nil {
+        err := ioutil.WriteFile("/proc/sys/net/ipv4/icmp_echo_ignore_all",
+                                c.old_icmp_val,
+                                0644)
+        if err != nil {
+            // TODO: log error
+        }
+    }
 }
 
 func serializeICMP(data []byte) ([]byte, error) {

@@ -75,8 +75,8 @@ type ServerAuthenticationResult struct {
  *  - After authentication succeeds, all further messages are just binary blobs
  *    that contain packets to be forwarded.  Note that the underlying transport
  *    may impose some overhead (e.g. the TCP transport will prefix packets with
- *    the length, since TCP is a stream-oriented protocol, and UDP needs to
- *    include a header for reliable delivery).
+ *    the length, since TCP is a stream-oriented protocol, and UDP might need
+ *    to include a header for reliable delivery).
  */
 
 // Global options
@@ -249,6 +249,7 @@ func randomBytes(l int) []byte {
         bytes[i] = charset[rand.Intn(len(charset))]
     }
 
+    // XXX: REMOVE ME, OR THIS IS VERY USELESS!
     return []byte{'a', 'b', 'c', 'd'}
     return bytes
 }
@@ -365,7 +366,7 @@ func runClient(tuntap tuntap.Device, hpserver string) {
         var challenge []byte
         select {
         case challenge = <-curr.PacketChannel():
-            // Fall through
+            // Fall to the end
         case <-timeoutCh:
             challenge = nil
         }
@@ -390,7 +391,7 @@ func runClient(tuntap tuntap.Device, hpserver string) {
         var resp []byte
         select {
         case resp = <-curr.PacketChannel():
-            // Fall through
+            // Fall to the end
         case <-timeoutCh:
             resp = nil
         }
