@@ -1,34 +1,21 @@
 package transports
 
 import (
-    "bytes"
     "encoding/binary"
     "fmt"
-    "io"
     "log"
     "net"
 )
 
-// ============================================================================
-// ============================== TCP TRANSPORT ===============================
-// ============================================================================
-
 type TCPPacketClient struct {
-    host     string
-    conn     *net.Conn
-    incoming chan []byte
-}
-
-// TODO: single struct with flag for which?
-type TCPPacketServer struct {
-    host     string
-    listener *net.Listener
-    incoming chan PacketClient
+    host    string
+    send_ch chan []byte
+    recv_ch chan []byte
+    conn    net.Conn
 }
 
 const TCP_PORT = 44461
 
-// Initializer.
 func NewTCPPacketClient(server string) (*TCPPacketClient, error) {
     host := fmt.Sprintf("%s:%d", server, TCP_PORT)
 
@@ -39,136 +26,119 @@ func NewTCPPacketClient(server string) (*TCPPacketClient, error) {
         return nil, err
     }
 
-    ret := startClientWithConn(&conn, host)
-    return ret, nil
+    return newClientFromConn(host, conn), nil
 }
 
-func startClientWithConn(conn *net.Conn, host string) *TCPPacketClient {
-    // Make packet channel.
-    incoming := make(chan []byte)
+func newClientFromConn(host string, conn net.Conn) *TCPPacketClient {
+    send_ch := make(chan []byte)
+    recv_ch := make(chan []byte)
 
-    // Make the client.
-    ret := &TCPPacketClient{host, conn, incoming}
+    // Create structure.
+    ret := &TCPPacketClient{host, send_ch, recv_ch, conn}
 
-    // This goroutine handles reads that can time out.
-    go startTcpClientRecv(ret)
+    // Start copying goroutines.
+    go ret.doSend()
+    go ret.doRecv()
 
-    // Return client
     return ret
 }
 
-func NewTCPPacketServer(bindTo string) (*TCPPacketServer, error) {
+func (c *TCPPacketClient) doSend() {
+    length := make([]byte, 2)
+    for {
+        // TODO: select on "stop" channel
+        pkt := <-c.send_ch
+
+        binary.LittleEndian.PutUint16(length, uint16(len(pkt)))
+        _, err := c.conn.Write(length)
+        if err != nil {
+            log.Printf("Error writing length: %s\n", err)
+            break
+        }
+
+        _, err = c.conn.Write(pkt)
+        if err != nil {
+            log.Printf("Error writing packet: %s\n", err)
+            break
+        }
+    }
+}
+
+func (c *TCPPacketClient) doRecv() {
+    length := make([]byte, 2)
+    for {
+        _, err := c.conn.Read(length)
+        if err != nil {
+            log.Printf("Error reading length: %s\n", err)
+            break
+        }
+        ilen := binary.LittleEndian.Uint16(length)
+
+        pkt := make([]byte, ilen)
+
+        _, err = c.conn.Read(pkt)
+        if err != nil {
+            log.Printf("Error reading packet: %s\n", err)
+            break
+        }
+
+        // TODO: select on "stop" channel
+        c.recv_ch <- pkt
+    }
+}
+
+func (c *TCPPacketClient) SendChannel() chan []byte {
+    return c.send_ch
+}
+
+func (c *TCPPacketClient) RecvChannel() chan []byte {
+    return c.recv_ch
+}
+
+func (c *TCPPacketClient) Close() {
+    c.conn.Close()
+}
+
+func (c *TCPPacketClient) Describe() string {
+    return "TCPPacketClient"
+}
+
+type TCPTransport struct {
+    listen    net.Listener
+    accept_ch chan PacketClient
+}
+
+func NewTCPTransport(bindTo string) (*TCPTransport, error) {
     host := fmt.Sprintf("%s:%d", bindTo, TCP_PORT)
 
     listener, err := net.Listen("tcp", host)
     if err != nil {
-        log.Printf("Error listening on %s: %s\n", host, err)
         return nil, err
     }
 
-    // Create server.
-    ch := make(chan PacketClient)
-    server := &TCPPacketServer{bindTo, &listener, ch}
+    client_ch := make(chan PacketClient)
+    trans := &TCPTransport{listener, client_ch}
 
-    // This goroutine will accept new clients.
-    go (func() {
-        for {
-            conn, err := listener.Accept()
-            if err != nil {
-                log.Printf("Error accepting new client: %s\n", err)
-                continue
-            }
+    go trans.acceptConnections()
 
-            // Create a new client.
-            client := startClientWithConn(&conn, "foobar")
-
-            // Send this client on our accepting channel.
-            ch <- client
-        }
-    })()
-
-    return server, nil
+    return trans, nil
 }
 
-func (t *TCPPacketServer) AcceptChannel() chan PacketClient {
-    return t.incoming
-}
+func (t *TCPTransport) acceptConnections() {
+    log.Println("Started accepting clients")
 
-func startTcpClientRecv(tcpClient *TCPPacketClient) {
     for {
-        var length int16
-        lenb := make([]byte, 2)
-
-        // Try to read the length.  On an EOF error, we exit this
-        // goroutine, and on all other errors just keep reading lengths.
-        _, err := (*tcpClient.conn).Read(lenb)
-        if err == io.EOF {
-            log.Println("EOF received on length read")
-            break
-        } else if err != nil {
-            log.Printf("Error while reading length: %s\n", err)
-            continue
-        }
-
-        // Decode the length.
-        err = binary.Read(bytes.NewBuffer(lenb), binary.LittleEndian, &length)
+        conn, err := t.listen.Accept()
         if err != nil {
-            log.Printf("Error decoding length: %s\n", err)
+            log.Printf("Error accepting client: %s\n", err)
             continue
         }
 
-        // Read this many bytes.
-        pkt := make([]byte, length)
-        _, err = (*tcpClient.conn).Read(pkt)
-        if err == io.EOF {
-            log.Println("EOF received on packet read")
-            break
-        } else if err != nil {
-            log.Printf("Error while reading packet: %s\n", err)
-            continue
-        }
-
-        // Got a packet - send to our channel.  Note that we will then
-        // loop around to the top again, and continue reading packets.
-        tcpClient.incoming <- pkt
+        client := newClientFromConn("host", conn)
+        t.accept_ch <- client
     }
-
-    // TODO: we should have some way of signalling that we're done here - and
-    // perhaps some other way of manually breaking out of the loop.  Perhaps a
-    // 'chan bool' that we send to when we hit here?
 }
 
-func (t *TCPPacketClient) SendPacket(pkt []byte) error {
-    // Encode length of packet.
-    buf := &bytes.Buffer{}
-    l := int16(len(pkt))
-    err := binary.Write(buf, binary.LittleEndian, l)
-    if err != nil {
-        return err
-    }
-
-    // Send length of packet, then the packet itself.
-    _, err = (*t.conn).Write(buf.Bytes())
-    if err != nil {
-        return err
-    }
-
-    _, err = (*t.conn).Write(pkt)
-    if err != nil {
-        return err
-    }
-
-    return nil
-}
-
-func (t *TCPPacketClient) PacketChannel() chan []byte {
-    return t.incoming
-}
-
-func (t *TCPPacketClient) Describe() string {
-    return "TCPPacketClient"
-}
-
-func (t *TCPPacketClient) Close() {
-    // Do nothing.
+func (t *TCPTransport) AcceptChannel() chan PacketClient {
+    return t.accept_ch
 }
