@@ -26,13 +26,6 @@ func main() {
     // Seed PRNG.
     rand.Seed(time.Now().UTC().UnixNano())
 
-    // Deal with signals.
-    // TODO: do we really need another goroutine for this?
-    sig_ch := make(chan os.Signal, 1)
-    done_ch := make(chan bool)
-    go handleSignals(sig_ch, done_ch)
-    signal.Notify(sig_ch, os.Interrupt, os.Kill)
-
     // Check subcommand.
     if len(os.Args) < 2 {
         fmt.Println("Usage:")
@@ -57,11 +50,12 @@ func main() {
         os.Exit(1)
     }
 
-    <-done_ch
-}
+    // Deal with signals.
+    sig_ch := make(chan os.Signal, 1)
+    signal.Notify(sig_ch, os.Interrupt, os.Kill)
 
-func handleSignals(ch chan os.Signal, done chan bool) {
-    // Tell the server / client to stop.
+    <-sig_ch
+
     switch which {
     case UNKNOWN:
         // Do nothing, just exit.
@@ -73,5 +67,7 @@ func handleSignals(ch chan os.Signal, done chan bool) {
         holepunch.StopClient()
     }
 
-    done <- true
+    // TODO: wait for server/client to finish before exiting
+
+    log.Printf("Done\n")
 }
