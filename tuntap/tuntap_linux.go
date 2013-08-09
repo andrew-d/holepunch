@@ -38,25 +38,24 @@ func GetTuntapDevice() (Device, error) {
     copy(req.Name[:15], name)
 
     // Send the request.
-    _, _, serr := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), uintptr(syscall.TUNSETIFF), uintptr(unsafe.Pointer(&req)))
+    _, _, serr := syscall.Syscall(syscall.SYS_IOCTL,
+        file.Fd(),
+        uintptr(syscall.TUNSETIFF),
+        uintptr(unsafe.Pointer(&req)))
     if serr != 0 {
         log.Printf("Error with syscall: %s\n", err)
         return nil, err
     }
 
-    // Create channels.
     packets := make(chan []byte)
     eof := make(chan bool)
 
-    // Create structure.
-    tuntap := LinuxTunTap{file, name, packets, eof}
-
+    tuntap := &LinuxTunTap{file, name, packets, eof}
     return tuntap, nil
 }
 
-func (t LinuxTunTap) Start() {
-    // Create goroutine that reads packets.
-    go packetReader(&t)
+func (t *LinuxTunTap) Start() {
+    go packetReader(t)
 }
 
 func packetReader(t *LinuxTunTap) {
@@ -79,23 +78,23 @@ func packetReader(t *LinuxTunTap) {
     }
 }
 
-func (t LinuxTunTap) RecvChannel() chan []byte {
+func (t *LinuxTunTap) RecvChannel() chan []byte {
     return t.packets
 }
 
-func (t LinuxTunTap) EOFChannel() chan bool {
+func (t *LinuxTunTap) EOFChannel() chan bool {
     return t.eof
 }
 
-func (t LinuxTunTap) Write(pkt []byte) error {
+func (t *LinuxTunTap) Write(pkt []byte) error {
     _, err := t.file.Write(pkt)
     return err
 }
 
-func (t LinuxTunTap) Name() string {
+func (t *LinuxTunTap) Name() string {
     return t.name
 }
 
-func (t LinuxTunTap) Close() {
+func (t *LinuxTunTap) Close() {
     t.file.Close()
 }

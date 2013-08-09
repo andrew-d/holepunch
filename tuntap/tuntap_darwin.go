@@ -29,19 +29,14 @@ func GetTuntapDevice() (Device, error) {
         return nil, err
     }
 
-    // Create channels.
     packets := make(chan []byte)
     eof := make(chan bool)
 
-    // Create structure.
-    tuntap := DarwinTunTap{tuntapDev, name, packets, eof}
-
-    // Return our device
-    return &tuntap, nil
+    tuntap := &DarwinTunTap{tuntapDev, name, packets, eof}
+    return tuntap, nil
 }
 
 func (t *DarwinTunTap) Start() {
-    // Create goroutine that reads packets.
     go packetReader(t)
 }
 
