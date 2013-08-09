@@ -65,6 +65,10 @@ func startClient(tt tuntap.Device, hpserver string) {
         switch m {
         case "tcp":
             curr_conn, err = transports.NewTCPPacketClient(hpserver)
+
+        default:
+            log.Printf("Unknown method: %s\n", m)
+            continue
         }
 
         if err != nil {

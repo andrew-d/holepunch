@@ -10,10 +10,11 @@ import (
 )
 
 type DarwinTunTap struct {
-    file    *os.File
-    name    string
-    packets chan []byte
-    eof     chan bool
+    file     *os.File
+    name     string
+    packets  chan []byte
+    finished chan bool
+    exit     chan bool
 }
 
 func GetTuntapDevice() (Device, error) {
@@ -30,9 +31,10 @@ func GetTuntapDevice() (Device, error) {
     }
 
     packets := make(chan []byte)
-    eof := make(chan bool)
+    finished := make(chan bool)
+    exit := make(chan bool)
 
-    tuntap := &DarwinTunTap{tuntapDev, name, packets, eof}
+    tuntap := &DarwinTunTap{tuntapDev, name, packets, finished, exit}
     return tuntap, nil
 }
 
@@ -61,6 +63,7 @@ func FD_CLEAR(fd int, p *syscall.FdSet) {
 }
 
 func packetReader(t *DarwinTunTap) {
+    var exit bool
     packet := make([]byte, 65535)
     fds := new(syscall.FdSet)
     fd := int(t.file.Fd())
@@ -71,11 +74,23 @@ func packetReader(t *DarwinTunTap) {
         // things.  We need to use syscall.Select.
         syscall.Select(fd+1, fds, nil, nil, nil)
 
-        // Actually read.
+        // We need to check whether we're to exit here - before the .Read() call
+        // below, since the syscall above could have been terminated by the
+        // closure of the associated fd.  We do a non-blocking select that will
+        // fall through to the default case if there is nothing to read from our
+        // exit channel to determine this.
+        select {
+        case exit = <-t.exit:
+        default:
+        }
+        if exit {
+            log.Printf("Exit signal received\n")
+            break
+        }
+
         n, err := t.file.Read(packet)
         if err == io.EOF {
-            t.eof <- true
-            return
+            break
         } else if err != nil {
             log.Printf("Error reading from tuntap: %s\n", err)
 
@@ -87,6 +102,10 @@ func packetReader(t *DarwinTunTap) {
 
         t.packets <- packet[0:n]
     }
+
+    // This needs to be the last thing in the function.
+    log.Printf("Done")
+    t.finished <- true
 }
 
 func (t *DarwinTunTap) RecvChannel() chan []byte {
@@ -94,7 +113,7 @@ func (t *DarwinTunTap) RecvChannel() chan []byte {
 }
 
 func (t *DarwinTunTap) EOFChannel() chan bool {
-    return t.eof
+    return t.finished
 }
 
 func (t *DarwinTunTap) Write(pkt []byte) error {
@@ -107,6 +126,14 @@ func (t *DarwinTunTap) Name() string {
 }
 
 func (t *DarwinTunTap) Close() {
+    // We run the syscall.Select (above) with no timeout, so we need to force
+    // the call to abort.  The easiest way to do this is close the fd.
     t.file.Close()
     t.file = nil
+
+    // Tell the tuntap reader to exit...
+    t.exit <- true
+
+    // ... and wait for it to finish.
+    <-t.finished
 }

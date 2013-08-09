@@ -88,7 +88,6 @@ func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
             log.Println("Authentication success!")
         }
     case <-time.After(10 * time.Second):
-        // Timeout!
         log.Printf("Authentication timeout")
         return
     }
@@ -99,7 +98,10 @@ func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
         select {
         case from_client := <-recv_ch:
             log.Printf("client --> tuntap (%d bytes)\n", len(from_client))
-            tt.Write(from_client)
+            err = tt.Write(from_client)
+            if err != nil {
+                log.Printf("Error writing: %s\n", err)
+            }
 
         case from_tuntap := <-tt.RecvChannel():
             log.Printf("tuntap --> client (%d bytes)\n", len(from_tuntap))

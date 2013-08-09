@@ -11,10 +11,11 @@ import (
 )
 
 type LinuxTunTap struct {
-    file    *os.File
-    name    string
-    packets chan []byte
-    eof     chan bool
+    file     *os.File
+    name     string
+    packets  chan []byte
+    exit     chan bool
+    finished chan bool
 }
 
 func GetTuntapDevice() (Device, error) {
@@ -48,9 +49,10 @@ func GetTuntapDevice() (Device, error) {
     }
 
     packets := make(chan []byte)
-    eof := make(chan bool)
+    finished := make(chan bool)
+    exit := make(chan bool)
 
-    tuntap := &LinuxTunTap{file, name, packets, eof}
+    tuntap := &LinuxTunTap{file, name, packets, finished, exit}
     return tuntap, nil
 }
 
@@ -61,14 +63,25 @@ func (t *LinuxTunTap) Start() {
 func packetReader(t *LinuxTunTap) {
     var n int
     var err error
+    var exit bool
     packet := make([]byte, 65535)
 
     for {
         n, err = t.file.Read(packet)
+
+        // Check if we are to exit.
+        select {
+        case exit = <-t.exit:
+        default:
+        }
+        if exit {
+            log.Printf("Exit signal received\n")
+            break
+        }
+
         if err == io.EOF || n == 0 {
             log.Printf("EOF reading from TUN: %s", err)
-            t.eof <- true
-            return
+            break
         } else if err != nil {
             log.Printf("Error reading from tuntap: %s\n", err)
             continue
@@ -76,6 +89,9 @@ func packetReader(t *LinuxTunTap) {
 
         t.packets <- packet[0:n]
     }
+
+    log.Printf("Done")
+    t.finished <- true
 }
 
 func (t *LinuxTunTap) RecvChannel() chan []byte {
@@ -83,7 +99,7 @@ func (t *LinuxTunTap) RecvChannel() chan []byte {
 }
 
 func (t *LinuxTunTap) EOFChannel() chan bool {
-    return t.eof
+    return t.finished
 }
 
 func (t *LinuxTunTap) Write(pkt []byte) error {
@@ -98,4 +114,8 @@ func (t *LinuxTunTap) Name() string {
 func (t *LinuxTunTap) Close() {
     t.file.Close()
     t.file = nil
+
+    // See comments in tuntap_darwin for this function.
+    t.exit <- true
+    <-t.finished
 }
