@@ -97,4 +97,5 @@ func (t *LinuxTunTap) Name() string {
 
 func (t *LinuxTunTap) Close() {
     t.file.Close()
+    t.file = nil
 }

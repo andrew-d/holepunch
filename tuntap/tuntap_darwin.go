@@ -108,4 +108,5 @@ func (t *DarwinTunTap) Name() string {
 
 func (t *DarwinTunTap) Close() {
     t.file.Close()
+    t.file = nil
 }
