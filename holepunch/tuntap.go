@@ -3,6 +3,7 @@ package holepunch
 import (
     "log"
     "os/exec"
+    "strings"
     "time"
 
     "github.com/andrew-d/holepunch/tuntap"
@@ -52,4 +53,31 @@ func configureTuntap(is_client bool, devName string) {
     // TODO: we should repeatedly check until the interface is up, rather than
     // just waiting for a given length
     <-time.After(1 * time.Second)
+
+    // Get output of ifconfig.
+    stat := exec.Command("/sbin/ifconfig")
+    out, err = stat.Output()
+    if err != nil {
+        log.Printf("Error running status command: %s\n", err)
+    } else {
+        lines := strings.Split(string(out), "\n")
+
+        var out_lines []string
+        found := false
+        for _, l := range lines {
+            // We start grabbing at the tun device, and stop when we hit a blank line,
+            // which indicates another device.
+            if strings.HasPrefix(l, devName) {
+                found = true
+            } else if found && l == "" {
+                found = false
+            }
+
+            if found {
+                out_lines = append(out_lines, l)
+            }
+        }
+
+        log.Printf("ifconfig output:\n%s", strings.Join(out_lines, "\n"))
+    }
 }
