@@ -2,8 +2,8 @@ package holepunch
 
 import (
     "crypto/hmac"
-    "crypto/subtle"
     "crypto/sha256"
+    "crypto/subtle"
     "encoding/hex"
     flag "github.com/ogier/pflag"
     //"fmt"

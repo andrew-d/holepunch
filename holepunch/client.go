@@ -1,12 +1,18 @@
 package holepunch
 
 import (
-    flag "github.com/ogier/pflag"
+    "bytes"
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/hex"
     "fmt"
+    flag "github.com/ogier/pflag"
     "log"
     "os"
     "strings"
+    "time"
 
+    "github.com/andrew-d/holepunch/transports"
     "github.com/andrew-d/holepunch/tuntap"
 )
 
@@ -23,7 +29,6 @@ func RunClient(args []string) {
 
     flags.Parse(args)
 
-    var holepunch_server string
     cmd_args := flags.Args()
     if len(cmd_args) < 1 {
         fmt.Fprintf(os.Stderr, "No server address given!\n\n")
@@ -31,14 +36,10 @@ func RunClient(args []string) {
         fmt.Fprintf(os.Stderr, "  holepunch client [options] server_addr\n\n")
         os.Exit(1)
     } else {
-        holepunch_server = cmd_args[0]
+        // Use a different goroutine, so the main routine can wait for signals.
+        tt := getTuntap(true)
+        go startClient(tt, cmd_args[0])
     }
-
-    tt := getTuntap(true)
-    defer tt.Close()
-
-    // Use a different goroutine, so the main routine can wait for signals.
-    go startClient(tt, holepunch_server)
 }
 
 func StopClient() {
@@ -46,11 +47,113 @@ func StopClient() {
 }
 
 func startClient(tt tuntap.Device, hpserver string) {
+    defer tt.Close()
     log.Printf("Holepunching with server %s...\n", hpserver)
 
-    // Determine the method.
-    var methods = strings.Split(method, ",")
+    methods := strings.Split(method, ",")
     if len(methods) == 1 && methods[0] == "all" {
         methods = []string{"tcp", "udp", "icmp", "dns"}
+    }
+
+    var conn transports.PacketClient
+    var err error
+
+    for _, m := range methods {
+        var curr_conn transports.PacketClient
+
+        err = nil
+        switch m {
+        case "tcp":
+            curr_conn, err = transports.NewTCPPacketClient(hpserver)
+        }
+
+        if err != nil {
+            log.Printf("Error creating transport '%s': %s\n", m, err)
+            continue
+        }
+
+        if doAuth(curr_conn) {
+            conn = curr_conn
+            break
+        }
+    }
+
+    if conn == nil {
+        log.Printf("Could not create connection to server, exiting...\n")
+        return
+    }
+    defer conn.Close()
+
+    send_ch := conn.SendChannel()
+    recv_ch := conn.RecvChannel()
+    for {
+        // TODO: some way of stopping this
+        select {
+        case from_server := <-recv_ch:
+            log.Printf("server --> tuntap (%d bytes)\n", len(from_server))
+            tt.Write(from_server)
+
+        case from_tuntap := <-tt.RecvChannel():
+            log.Printf("tuntap --> server (%d bytes)\n", len(from_tuntap))
+            send_ch <- from_tuntap
+
+        case <-tt.EOFChannel():
+            log.Println("EOF received from TUN/TAP device, exiting...")
+            return
+        }
+    }
+}
+
+func doAuth(conn transports.PacketClient) bool {
+    // Authentication times out after 10 seconds.
+    timeout_ch := time.After(10 * time.Second)
+    send_ch := conn.SendChannel()
+    recv_ch := conn.RecvChannel()
+
+    // Receive the nonce from the server.
+    var nonce []byte
+    select {
+    case nonce = <-recv_ch:
+        // fall through
+    case <-timeout_ch:
+        log.Printf("Client authentication timed out: receiving nonce\n")
+        return false
+    }
+
+    hm := hmac.New(sha256.New, []byte(password))
+    _, err := hm.Write(nonce)
+    if err != nil {
+        log.Printf("Error computing HMAC: %s\n", err)
+        return false
+    }
+
+    resp := make([]byte, 64)
+    hex.Encode(resp, hm.Sum(nil))
+
+    select {
+    case send_ch <- resp:
+        // fall through
+    case <-timeout_ch:
+        log.Printf("Client authentication timed out: sending respond\n")
+        return false
+    }
+
+    // Wait for a response from the server.
+    var serv_resp []byte
+    select {
+    case serv_resp = <-recv_ch:
+        // fall through
+    case <-timeout_ch:
+        log.Printf("Client authentication timed out: waiting for confirmation\n")
+        return false
+    }
+
+    // Check response.
+    if bytes.Equal(serv_resp, []byte("success")) {
+        log.Printf("Authentication success\n")
+        return true
+    } else {
+        log.Printf("Authentication failure: %s\n", serv_resp)
+        return false
     }
 }
