@@ -45,9 +45,11 @@ func main() {
     switch cmd {
     case "client":
         holepunch.RunClient(os.Args[2:])
+        which = CLIENT
 
     case "server":
         holepunch.RunServer(os.Args[2:])
+        which = SERVER
 
     default:
         fmt.Fprintf(os.Stderr, "Usage:\n")

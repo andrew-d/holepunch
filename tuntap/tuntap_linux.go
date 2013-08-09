@@ -30,6 +30,7 @@ func GetTuntapDevice() (Device, error) {
         log.Printf("Error opening file: %s\n", err)
         return nil, err
     }
+    log.Printf("TUN fd = %d\n", file.Fd())
 
     // Create the request to send.
     var req ifReq
@@ -66,7 +67,7 @@ func packetReader(t *LinuxTunTap) {
     for {
         n, err = t.file.Read(packet)
         if err == io.EOF || n == 0 {
-            log.Printf("%d / %s", n, err)
+            log.Printf("EOF reading from TUN: %s", err)
             t.eof <- true
             return
         } else if err != nil {

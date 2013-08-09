@@ -2,6 +2,7 @@ package holepunch
 
 import (
     "crypto/hmac"
+    "crypto/subtle"
     "crypto/sha256"
     "encoding/hex"
     flag "github.com/ogier/pflag"
@@ -73,10 +74,10 @@ func handleNewClient(tuntap tuntap.Device, client transports.PacketClient) {
 
     select {
     case resp := <-recv_ch:
-        // Note that it is IMPORTANT we use hmac.Equal here, to avoid leaking
+        // Note that it is IMPORTANT we use this function here, to avoid leaking
         // timing information.  Then, if authentication fails, we just outright
         // exit, and let the deferred close handle things.
-        if !hmac.Equal(resp, expected) {
+        if subtle.ConstantTimeCompare(resp, expected) != 1 {
             log.Printf("Authentication failure")
             send_ch <- []byte("failure")
             return
