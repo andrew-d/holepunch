@@ -19,19 +19,21 @@ func RunServer(args []string) {
     addCommonOptions(flags)
     flags.Parse(args)
 
-    tuntap := getTuntap(false)
-    defer tuntap.Close()
-
     // We start the transports in another goroutine, so our main routine can
     // return (and wait for signals).
-    go startTransports(tuntap)
+    // Note: The startTransports function takes ownership (and closes) the
+    // tuntap device.
+    tt := getTuntap(false)
+    go startTransports(tt)
 }
 
 func StopServer() {
     // TODO: fill me in!
 }
 
-func startTransports(tuntap tuntap.Device) {
+func startTransports(tt tuntap.Device) {
+    defer tt.Close()
+
     trans, err := transports.NewTCPTransport("0.0.0.0")
     if err != nil {
         log.Printf("Error starting TCP transport: %s\n", err)
@@ -41,14 +43,15 @@ func startTransports(tuntap tuntap.Device) {
     // Repeatedly accept clients.
     ch := trans.AcceptChannel()
     for {
+        // TODO: have some way of stopping this
         client := <-ch
 
-        go handleNewClient(tuntap, client)
+        go handleNewClient(tt, client)
     }
 }
 
 // Authenticate and then handle the client.
-func handleNewClient(tuntap tuntap.Device, client transports.PacketClient) {
+func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
     log.Println("Accepted new client")
     defer client.Close()
 
@@ -96,13 +99,13 @@ func handleNewClient(tuntap tuntap.Device, client transports.PacketClient) {
         select {
         case from_client := <-recv_ch:
             log.Printf("client --> tuntap (%d bytes)\n", len(from_client))
-            tuntap.Write(from_client)
+            tt.Write(from_client)
 
-        case from_tuntap := <-tuntap.RecvChannel():
+        case from_tuntap := <-tt.RecvChannel():
             log.Printf("tuntap --> client (%d bytes)\n", len(from_tuntap))
             send_ch <- from_tuntap
 
-        case <-tuntap.EOFChannel():
+        case <-tt.EOFChannel():
             log.Println("EOF received from TUN/TAP device, exiting...")
             return
         }

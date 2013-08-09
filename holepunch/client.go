@@ -34,18 +34,18 @@ func RunClient(args []string) {
         holepunch_server = cmd_args[0]
     }
 
-    tuntap := getTuntap(true)
-    defer tuntap.Close()
+    tt := getTuntap(true)
+    defer tt.Close()
 
     // Use a different goroutine, so the main routine can wait for signals.
-    go startClient(tuntap, holepunch_server)
+    go startClient(tt, holepunch_server)
 }
 
 func StopClient() {
     // TODO: fill me in!
 }
 
-func startClient(tuntap tuntap.Device, hpserver string) {
+func startClient(tt tuntap.Device, hpserver string) {
     log.Printf("Holepunching with server %s...\n", hpserver)
 
     // Determine the method.
