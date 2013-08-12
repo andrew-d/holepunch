@@ -35,7 +35,7 @@ func GetTuntapDevice() (Device, error) {
 
     // Create the request to send.
     var req ifReq
-    req.Flags = iffOneQueue | iffTun
+    req.Flags = iffOneQueue | iffTun | iffNoPI
     copy(req.Name[:15], name)
 
     // Send the request.

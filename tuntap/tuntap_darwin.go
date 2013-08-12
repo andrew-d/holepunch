@@ -132,6 +132,9 @@ func (t *DarwinTunTap) Close() {
     t.file = nil
 
     // Tell the tuntap reader to exit...
+    // TODO: I think there might be a race condition here,
+    // we might need to make this a 1-sized channel and put
+    // the channel call before the file.Close()
     t.exit <- true
 
     // ... and wait for it to finish.

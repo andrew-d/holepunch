@@ -7,6 +7,7 @@ const (
 
     iffTun      = 0x1
     iffTap      = 0x2
+    iffNoPI     = 0x1000
     iffOneQueue = 0x2000
 )
 

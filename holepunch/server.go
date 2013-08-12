@@ -59,12 +59,6 @@ func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
     recv_ch := client.RecvChannel()
 
     nonce := randomBytes(32)
-    send_ch <- nonce
-
-    // Wait for one of three things:
-    //  - Successful authentication
-    //  - Unsuccessful authentication
-    //  - Timeout
     hm := hmac.New(sha256.New, []byte(password))
     _, err := hm.Write(nonce)
     if err != nil {
@@ -75,6 +69,13 @@ func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
     expected := make([]byte, 64)
     hex.Encode(expected, hm.Sum(nil))
 
+    // Send the challenge...
+    send_ch <- nonce
+
+    // ... and wait for one of three things:
+    //  - Successful authentication
+    //  - Unsuccessful authentication
+    //  - Timeout
     select {
     case resp := <-recv_ch:
         // Note that it is IMPORTANT we use this function here, to avoid leaking
