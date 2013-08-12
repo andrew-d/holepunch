@@ -86,10 +86,20 @@ func startClient(tt tuntap.Device, hpserver string) {
         log.Printf("Could not create connection to server, exiting...\n")
         return
     }
-    defer conn.Close()
+    log.Printf("Connected to server (reliable = %t)\n", conn.IsReliable())
 
-    send_ch := conn.SendChannel()
-    recv_ch := conn.RecvChannel()
+    // Set up encryption.
+    enc_conn, err := transports.NewEncryptedPacketClient(conn, "foobar")
+    if err != nil {
+        log.Printf("Could not initialize encryption: %s\n", err)
+        conn.Close()
+        return
+    }
+    recv_ch := enc_conn.RecvChannel()
+    send_ch := enc_conn.SendChannel()
+
+    defer enc_conn.Close()
+
     for {
         // TODO: some way of stopping this
         select {

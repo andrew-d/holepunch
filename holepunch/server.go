@@ -52,8 +52,15 @@ func startTransports(tt tuntap.Device) {
 
 // Authenticate and then handle the client.
 func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
-    log.Println("Accepted new client")
-    defer client.Close()
+    log.Printf("Accepted new client (reliable = %t)\n", client.IsReliable())
+
+    var closeClient bool = true
+    defer func() {
+        if closeClient {
+            log.Printf("Closing underlying client...\n")
+            client.Close()
+        }
+    }()
 
     send_ch := client.SendChannel()
     recv_ch := client.RecvChannel()
@@ -94,6 +101,20 @@ func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
     }
 
     send_ch <- []byte("success")
+
+    // Set up encryption.
+    enc_client, err := transports.NewEncryptedPacketClient(client, "foobar")
+    if err != nil {
+        log.Printf("Could not initialize encryption: %s\n", err)
+        return
+    }
+    recv_ch = enc_client.RecvChannel()
+    send_ch = enc_client.SendChannel()
+
+    // XXX: nasty hack to not double-free.  enc_client really should always
+    // free the underlying client, though
+    closeClient = false
+    defer enc_client.Close()
 
     for {
         select {

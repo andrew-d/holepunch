@@ -1,15 +1,17 @@
 package transports
 
 import (
-    "crypto/cipher"
     "crypto/aes"
+    "crypto/cipher"
     "crypto/hmac"
-    "crypto/subtle"
     "crypto/rand"
     "crypto/sha256"
+    "crypto/subtle"
     "fmt"
     "io"
     "log"
+
+    "code.google.com/p/go.crypto/pbkdf2"
 )
 
 // This package implements a simple encrypted transport on top of an existing
@@ -20,9 +22,12 @@ import (
 // connection.
 
 type EncryptedPacketClient struct {
-    underlying PacketClient
-    our_stream cipher.Stream
+    underlying   PacketClient
+    our_stream   cipher.Stream
     other_stream cipher.Stream
+    send_ch      chan []byte
+    recv_ch      chan []byte
+    key          []byte
 }
 
 const TEST_STRING = "this is a test string"
@@ -39,17 +44,16 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     //  - On receipt of the other side's message, it is decrypted and
     //    verified to match the test string.
     //
-    // NOTES:
-    //  - Crypto is hard
-    //  - This will probably^H^H^H for sure be buggy - need to make sure people
-    //    know this
-    //  - Encrypt, then MAC
-    //  - Random IVs for each initialization, don't re-use IVs or nonces (CTR)
-    //  - Constant-time comparison
-    //
     // TODO:
     //  - Close underlying client on error?
+    //  - This breaks when packets become lost - e.g. our UDP or ICMP
+    //    transports.  We need to use something else - e.g. CBC, but generating
+    //    a context (and IV) for every packet.
+    //  - Should authenticate each packet with HMAC
+
     secret_bytes := []byte(secret)
+    salt := []byte("") // TODO: is this valid?
+    key := pbkdf2.Key(secret_bytes, salt, 16384, 32, sha256.New)
 
     our_iv := make([]byte, aes.BlockSize)
     n, err := io.ReadFull(rand.Reader, our_iv)
@@ -60,7 +64,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
             n, len(our_iv))
     }
 
-    hm := hmac.New(sha256.New, secret_bytes)
+    hm := hmac.New(sha256.New, key)
     _, err = hm.Write(our_iv)
     if err != nil {
         return nil, err
@@ -71,7 +75,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     // goroutine to concurrently send our IV to the other end of the
     // connection, and then read the other side's IV.
     go func() {
-        pkt := make([]byte, len(our_iv) + len(our_iv_mac))
+        pkt := make([]byte, len(our_iv)+len(our_iv_mac))
         copy(pkt, our_iv)
         copy(pkt[len(our_iv):], our_iv_mac)
         underlying.SendChannel() <- pkt
@@ -83,7 +87,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     other_iv_mac := other_pkt[aes.BlockSize:]
 
     // Reset our HMAC
-    hm = hmac.New(sha256.New, secret_bytes)
+    hm = hmac.New(sha256.New, key)
     _, err = hm.Write(other_iv)
     if err != nil {
         return nil, err
@@ -94,13 +98,13 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     }
 
     // Use these values to set up two stream ciphers.
-    our_block, err := aes.NewCipher(secret_bytes)
+    our_block, err := aes.NewCipher(key)
     if err != nil {
         return nil, err
     }
     our_stream := cipher.NewCTR(our_block, our_iv)
 
-    other_block, err := aes.NewCipher(secret_bytes)
+    other_block, err := aes.NewCipher(key)
     if err != nil {
         return nil, err
     }
@@ -123,16 +127,53 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     }
 
     // If we get here, it all works!
-    ret := &EncryptedPacketClient{underlying, our_stream, other_stream}
+    ret := &EncryptedPacketClient{
+        underlying, our_stream, other_stream,
+        make(chan []byte), make(chan []byte),
+        key,
+    }
+
+    go ret.doSend()
+    go ret.doRecv()
     return ret, nil
 }
 
+func (c *EncryptedPacketClient) doSend() {
+    stream := c.our_stream
+    underlying := c.underlying.SendChannel()
+
+    // TODO: have some way of stopping this
+    for {
+        unenc := <-c.send_ch
+        enc := make([]byte, len(unenc))
+        stream.XORKeyStream(enc, unenc)
+
+        log.Printf("Encrypted %d bytes...\n", len(unenc))
+        underlying <- enc
+    }
+}
+
+func (c *EncryptedPacketClient) doRecv() {
+    stream := c.other_stream
+    underlying := c.underlying.RecvChannel()
+
+    // TODO: have some way of stopping this
+    for {
+        enc := <-underlying
+        unenc := make([]byte, len(enc))
+        stream.XORKeyStream(unenc, enc)
+
+        log.Printf("Unencrypted %d bytes...\n", len(enc))
+        c.recv_ch <- unenc
+    }
+}
+
 func (c *EncryptedPacketClient) SendChannel() chan []byte {
-    return c.underlying.SendChannel()
+    return c.send_ch
 }
 
 func (c *EncryptedPacketClient) RecvChannel() chan []byte {
-    return c.underlying.RecvChannel()
+    return c.recv_ch
 }
 
 func (c *EncryptedPacketClient) Close() {
