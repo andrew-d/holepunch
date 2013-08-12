@@ -99,6 +99,10 @@ func (c *TCPPacketClient) Close() {
     c.conn.Close()
 }
 
+func (c *TCPPacketClient) IsReliable() bool {
+    return true
+}
+
 func (c *TCPPacketClient) Describe() string {
     return "TCPPacketClient"
 }

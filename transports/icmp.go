@@ -78,6 +78,10 @@ func (c *ICMPPacketClient) RecvChannel() chan []byte {
     return c.recv_ch
 }
 
+func (c *ICMPPacketClient) IsReliable() bool {
+    return false
+}
+
 func (c *ICMPPacketClient) Describe() string {
     return "ICMPPacketClient"
 }

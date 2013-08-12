@@ -5,6 +5,7 @@ type PacketClient interface {
     SendChannel() chan []byte
     RecvChannel() chan []byte
     Close()
+    IsReliable() bool
     Describe() string
 }
 

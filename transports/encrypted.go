@@ -139,6 +139,10 @@ func (c *EncryptedPacketClient) Close() {
     c.underlying.Close()
 }
 
+func (c *EncryptedPacketClient) IsReliable() bool {
+    return c.underlying.IsReliable()
+}
+
 func (c *EncryptedPacketClient) Describe() string {
     return "EncryptedPacketClient"
 }
