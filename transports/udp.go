@@ -1,8 +1,7 @@
 package transports
 
 // NOTE:
-// If we're going to include a UDP transport in holepunch, there needs to be
-// some way of preventing spoofed UDP packets.  For example: HMAC'ing each
-// packet with the shared secret we use for authentication (or some derived
-// version of that).  Note that **CRYPTO IS HARD**, and there will probably
-// still be bugs in this code - mention it prominently in the documentation.
+// UDP packets here can be spoofed, so it is necessary to have the encryption/
+// authentication layer working too.  There's no point in using a sequence
+// number or something similar, since we don't make any guarantees about the
+// delivery of packets (similar to the internet as a whole).
