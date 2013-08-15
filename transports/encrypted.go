@@ -8,23 +8,54 @@ import (
     "crypto/sha256"
     "crypto/subtle"
     "fmt"
+    "hash"
     "io"
     "log"
+    "time"
 
+    "code.google.com/p/go.crypto/nacl/secretbox"
     "code.google.com/p/go.crypto/pbkdf2"
 )
 
 // This package implements a simple encrypted transport on top of an existing
-// transport.  In general, it runs AES in CTR mode over all the data that's
-// being sent and received.  The encryption key is generated from a shared that
-// must be provided.  Note that this doesn't (necessarily) need to be the same
-// as the authentication secret, just that it must be equal on both side of the
+// transport.  In general, there's two modes of operation:
+//      - For reliable transports (e.g. TCP), it runs AES in CTR mode over all
+//        the data that's being sent and received, maintaining one cipher
+//        context for each direction of transport.  The message is
+//        authenticated using HMAC.
+//
+//      - For unreliable transports, we can't assume anything about the context
+//        of an individual packet, so we use go.crypto's secretbox package and
+//        random nonces (that are included with the packet itself).  Note that
+//        this package both encrypts and authenticates, we do not HMAC.
+//
+// Encryption keys are generated from a shared secret that must be provided.
+// Note that this doesn't (necessarily) need to be the same as the
+// authentication secret, just that it must be equal on both side of the
 // connection.
+//
+// Since the underlying machinery is mostly the same, we implement the basic
+// functionality as a structure, and provide the modes of operation as functions
+// that are somewhat black boxes.
+
+type encryptionMode interface {
+    Encrypt(data []byte) []byte
+    Decrypt(data []byte) ([]byte, bool)
+}
+
+type aesMode struct {
+    stream cipher.Stream
+    mac    hash.Hash
+}
+
+type secretboxMode struct {
+    key [32]byte
+}
 
 type EncryptedPacketClient struct {
     underlying   PacketClient
-    our_stream   cipher.Stream
-    other_stream cipher.Stream
+    send_mode   encryptionMode
+    recv_mode encryptionMode
     send_ch      chan []byte
     recv_ch      chan []byte
     key          []byte
@@ -32,139 +63,203 @@ type EncryptedPacketClient struct {
 
 const TEST_STRING = "this is a test string"
 
-func NewEncryptedPacketClient(underlying PacketClient, secret string) (*EncryptedPacketClient, error) {
-    // Current plans:
-    //  - Each side sends a random IV, MAC'd with the shared secret, then
-    //    sets up the stream cipher using the IVs and the shared secret as
-    //    the key.  Consider using PBKDF2 for the key (since just hashing is
-    //    insufficient security - though do we assume it must be hashed
-    //    already?)
-    //  - Each side then encrypts and sends a test string with the current
-    //    setup (stream cipher, IV, etc.)
-    //  - On receipt of the other side's message, it is decrypted and
-    //    verified to match the test string.
-    //
-    // TODO:
-    //  - Close underlying client on error?
-    //  - This breaks when packets become lost - e.g. our UDP or ICMP
-    //    transports.  We need to use something else - e.g. CBC, but generating
-    //    a context (and IV) for every packet.
-    //  - Should authenticate each packet with HMAC
+// --------------------------------------------------------------------------------
 
-    secret_bytes := []byte(secret)
-    salt := []byte("") // TODO: is this valid?
-    key := pbkdf2.Key(secret_bytes, salt, 16384, 32, sha256.New)
+func (m *aesMode) Encrypt(input []byte) []byte {
+    output := make([]byte, len(input))
+    m.stream.XORKeyStream(output, input)
 
-    our_iv := make([]byte, aes.BlockSize)
-    n, err := io.ReadFull(rand.Reader, our_iv)
-    if err != nil {
-        return nil, err
-    } else if n != len(our_iv) {
-        return nil, fmt.Errorf("read less than required bytes (%d < %d)",
-            n, len(our_iv))
+    // Start from reset each time.
+    m.mac.Reset()
+    m.mac.Write(output)
+
+    output = m.mac.Sum(output)
+    return output
+}
+
+func (m *aesMode) Decrypt(encrypted []byte) ([]byte, bool) {
+    if len(encrypted) < 32 {
+        return nil, false
+    }
+    output := make([]byte, len(encrypted) - 32)
+
+    // Short forms!
+    data := encrypted[0:len(encrypted) - 32]
+    mac := encrypted[len(encrypted) - 32:]
+
+    // Validate HMAC.
+    m.mac.Reset()
+    m.mac.Write(data)
+    expected := m.mac.Sum(nil)
+
+    if subtle.ConstantTimeCompare(expected, mac) != 1 {
+        return nil, false
     }
 
+    m.stream.XORKeyStream(output, data)
+    return output, true
+}
+
+func NewAesMode(key []byte) (*aesMode, error) {
+    // IV is defined as all 0s - it doesn't need to be secret.
+    iv := make([]byte, aes.BlockSize)
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return nil, err
+    }
+    stream := cipher.NewCTR(block, iv)
     hm := hmac.New(sha256.New, key)
-    _, err = hm.Write(our_iv)
-    if err != nil {
-        return nil, err
-    }
-    our_iv_mac := hm.Sum(nil)
 
-    // We have our IV, and the authenticated version of it.  We launch a
-    // goroutine to concurrently send our IV to the other end of the
-    // connection, and then read the other side's IV.
-    go func() {
-        pkt := make([]byte, len(our_iv)+len(our_iv_mac))
-        copy(pkt, our_iv)
-        copy(pkt[len(our_iv):], our_iv_mac)
-        underlying.SendChannel() <- pkt
-    }()
+    return &aesMode{stream, hm}, nil
+}
 
-    // Read from the other side.
-    other_pkt := <-underlying.RecvChannel()
-    other_iv := other_pkt[0:aes.BlockSize]
-    other_iv_mac := other_pkt[aes.BlockSize:]
+// --------------------------------------------------------------------------------
 
-    // Reset our HMAC
-    hm = hmac.New(sha256.New, key)
-    _, err = hm.Write(other_iv)
-    if err != nil {
-        return nil, err
+func (m *secretboxMode) Encrypt(input []byte) []byte {
+    var out []byte
+    var nonce [24]byte
+
+    n, err := io.ReadFull(rand.Reader, nonce[:])
+    if n != len(nonce) || err != nil {
+        panic("could not read from random number generator")
     }
 
-    if subtle.ConstantTimeCompare(other_iv_mac, hm.Sum(nil)) != 1 {
-        return nil, fmt.Errorf("remote IV hmac is invalid")
+    out = secretbox.Seal(out[:0], input, &nonce, &m.key)
+    out = append(out, nonce[:]...)
+    return out
+}
+
+func (m *secretboxMode) Decrypt(encrypted []byte) ([]byte, bool) {
+    var opened []byte
+    var nonce [24]byte
+
+    if len(encrypted) < 24 {
+        return nil, false
     }
 
-    // Use these values to set up two stream ciphers.
-    our_block, err := aes.NewCipher(key)
-    if err != nil {
-        return nil, err
-    }
-    our_stream := cipher.NewCTR(our_block, our_iv)
-
-    other_block, err := aes.NewCipher(key)
-    if err != nil {
-        return nil, err
-    }
-    other_stream := cipher.NewCTR(other_block, other_iv)
-
-    // Encrypt the test string with each stream, and then send/receive.
-    our_enc := make([]byte, len(TEST_STRING))
-    other_enc := make([]byte, len(TEST_STRING))
-    our_stream.XORKeyStream(our_enc, []byte(TEST_STRING))
-    other_stream.XORKeyStream(other_enc, []byte(TEST_STRING))
-
-    go func() {
-        underlying.SendChannel() <- our_enc
-    }()
-
-    other_data := <-underlying.RecvChannel()
-
-    if subtle.ConstantTimeCompare(other_enc, other_data) != 1 {
-        return nil, fmt.Errorf("remote encrypted test string doesn't match")
+    for i := 0; i < 24; i++ {
+        nonce[i] = encrypted[len(encrypted) - 24 + i]
     }
 
-    // If we get here, it all works!
+    opened, ok := secretbox.Open(opened[:0], encrypted, &nonce, &m.key)
+    return opened, ok
+}
+
+func NewSecretBoxMode(key []byte) (*secretboxMode, error) {
+    var key_arr [32]byte
+    if len(key) != 32 {
+        return nil, fmt.Errorf("invalid key length (%d != 32)", len(key))
+    }
+
+    // TODO: this is ugly, there's got to be a better way
+    for i := 0; i < 32; i++ {
+        key_arr[i] = key[i]
+    }
+    return &secretboxMode{key_arr}, nil
+}
+
+// --------------------------------------------------------------------------------
+
+func NewEncryptedPacketClient(underlying PacketClient, secret string) (*EncryptedPacketClient, error) {
+    var err error
+
+    // PBKDF2 the key to the appropriate size of 32 bytes (both for secretbox
+    // and for AES).
+    key := pbkdf2.Key([]byte(secret), []byte{}, 16384, 32, sha256.New)
+
+    // Depending on whether the underlying transport is reliable or not, we
+    // create a different mode.  We also do this twice, since we need one for
+    // each direction.
+    var send_mode encryptionMode
+    var recv_mode encryptionMode
+
+    if underlying.IsReliable() {
+        send_mode, err = NewAesMode(key)
+        if err != nil {
+            return nil, err
+        }
+
+        recv_mode, err = NewAesMode(key)
+        if err != nil {
+            return nil, err
+        }
+    } else {
+        send_mode, err = NewSecretBoxMode(key)
+        if err != nil {
+            return nil, err
+        }
+
+        recv_mode, err = NewSecretBoxMode(key)
+        if err != nil {
+            return nil, err
+        }
+    }
+
+    // Good, have our modes.  We set up our client now...
     ret := &EncryptedPacketClient{
-        underlying, our_stream, other_stream,
+        underlying, send_mode, recv_mode,
         make(chan []byte), make(chan []byte),
         key,
     }
 
     go ret.doSend()
     go ret.doRecv()
+
+    // Now, we need to authenticate it.  We do this simply by sending an
+    // encrypted constant (above), and waiting for a message from the server.
+    // If we get a message that decrypts to the same constant, then we assume
+    // that everything is legit.
+    timeout := time.After(10 * time.Second)
+
+    var test_bytes = []byte(TEST_STRING)
+    ret.SendChannel() <- test_bytes
+
+    select {
+    case msg := <- ret.RecvChannel():
+        // Verify it matches.
+        if subtle.ConstantTimeCompare(msg, test_bytes) != 1 {
+            log.Printf("Received invalid message\n")
+            return nil, fmt.Errorf("invalid message from remote end")
+        }
+
+        // Fall through to success
+    case <-timeout:
+        // Nope, errored!
+        log.Printf("Authentication timed out\n")
+        ret.Close()
+        return nil, fmt.Errorf("authentication timed out")
+    }
+
     return ret, nil
 }
 
 func (c *EncryptedPacketClient) doSend() {
-    stream := c.our_stream
+    mode := c.send_mode
+    ch := c.send_ch
     underlying := c.underlying.SendChannel()
 
     // TODO: have some way of stopping this
     for {
-        unenc := <-c.send_ch
-        enc := make([]byte, len(unenc))
-        stream.XORKeyStream(enc, unenc)
-
-        log.Printf("Encrypted %d bytes...\n", len(unenc))
+        unenc := <-ch
+        enc := mode.Encrypt(unenc)
         underlying <- enc
     }
 }
 
 func (c *EncryptedPacketClient) doRecv() {
-    stream := c.other_stream
+    stream := c.recv_mode
+    ch := c.recv_ch
     underlying := c.underlying.RecvChannel()
 
     // TODO: have some way of stopping this
     for {
         enc := <-underlying
-        unenc := make([]byte, len(enc))
-        stream.XORKeyStream(unenc, enc)
-
-        log.Printf("Unencrypted %d bytes...\n", len(enc))
-        c.recv_ch <- unenc
+        unenc, good := stream.Decrypt(enc)
+        if !good {
+            log.Printf("Error decrypting packet, skipping...\n")
+            continue
+        }
+        ch <- unenc
     }
 }
 
