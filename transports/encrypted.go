@@ -195,7 +195,6 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
         }
     }
 
-    // Good, have our modes.  We set up our client now...
     ret := &EncryptedPacketClient{
         underlying, send_mode, recv_mode,
         make(chan []byte), make(chan []byte),
@@ -205,14 +204,19 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     go ret.doSend()
     go ret.doRecv()
 
-    // Now, we need to authenticate it.  We do this simply by sending an
-    // encrypted constant (above), and waiting for a message from the server.
-    // If we get a message that decrypts to the same constant, then we assume
-    // that everything is legit.
-    // TODO: this is borked, replay attack, etc etc.  challenge-response is
-    // where it's at.
+    // This will time out the entire authentication operation
     timeout := time.After(10 * time.Second)
 
+    // TODO: Send some sort of authentication.  We can't simply assume that
+    // sending a nonce will work, as it might fail on an unreliable transport.
+    // For now, we just do nothing: any bad packets will error on decryption,
+    // which means they don't get forwarded.  This doesn't stop spoofed
+    // packets or replay attacks though, so we need to consider this in future.
+
+    // Force authentication by sending a known-constant string, and retrieving
+    // it from the other end.  Note that this isn't really "authentication",
+    // but rather just causes the other side of the connection to attempt to
+    // decrypt this packet, which might then fail.
     var test_bytes = []byte(TEST_STRING)
     ret.SendChannel() <- test_bytes
 
