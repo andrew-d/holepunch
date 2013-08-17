@@ -79,6 +79,7 @@ func (m *aesMode) Encrypt(input []byte) []byte {
 
 func (m *aesMode) Decrypt(encrypted []byte) ([]byte, bool) {
     if len(encrypted) < 32 {
+        log.Printf("AES: Not good: len (%d) < 32\n", len(encrypted))
         return nil, false
     }
     output := make([]byte, len(encrypted) - 32)
@@ -93,6 +94,7 @@ func (m *aesMode) Decrypt(encrypted []byte) ([]byte, bool) {
     expected := m.mac.Sum(nil)
 
     if subtle.ConstantTimeCompare(expected, mac) != 1 {
+        log.Printf("AES: Not good: MAC is bad\n")
         return nil, false
     }
 
@@ -134,6 +136,7 @@ func (m *secretboxMode) Decrypt(encrypted []byte) ([]byte, bool) {
     var nonce [24]byte
 
     if len(encrypted) < 24 {
+        log.Printf("secretbox: Not good: len (%d) < 24\n", len(encrypted))
         return nil, false
     }
 
@@ -141,7 +144,12 @@ func (m *secretboxMode) Decrypt(encrypted []byte) ([]byte, bool) {
         nonce[i] = encrypted[len(encrypted) - 24 + i]
     }
 
-    opened, ok := secretbox.Open(opened[:0], encrypted, &nonce, &m.key)
+    data := encrypted[:len(encrypted) - 24]
+    opened, ok := secretbox.Open(opened[:0], data, &nonce, &m.key)
+    if !ok {
+        log.Printf("secretbox: Not good: Open() returned false\n")
+    }
+
     return opened, ok
 }
 
@@ -223,7 +231,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     select {
     case msg := <- ret.RecvChannel():
         // Verify it matches.
-        if subtle.ConstantTimeCompare(msg, test_bytes) != 1 {
+        if len(msg) != len(test_bytes) || subtle.ConstantTimeCompare(msg, test_bytes) != 1 {
             log.Printf("Received invalid message\n")
             return nil, fmt.Errorf("invalid message from remote end")
         }
@@ -236,6 +244,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
         return nil, fmt.Errorf("authentication timed out")
     }
 
+    log.Printf("Authentication success\n")
     return ret, nil
 }
 

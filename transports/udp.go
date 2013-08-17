@@ -5,8 +5,7 @@ import (
     "log"
     "net"
     "sync"
-
-    // "time"
+    "time"
 )
 
 // NOTE:
@@ -38,7 +37,7 @@ type udpMessage struct {
 
 const UDP_PORT = 44461
 
-var clientMap = make(map[*net.UDPAddr]*UDPPacketClient)
+var clientMap = make(map[string]*UDPPacketClient)
 var clientMapLock sync.RWMutex
 
 func NewUDPPacketClient(server string) (*UDPPacketClient, error) {
@@ -99,26 +98,34 @@ func (u *UDPPacketClient) doForwardSend(forward_to chan udpMessage) {
 }
 
 func (u *UDPPacketClient) doRecv() {
-    var pkt []byte
+    var pkt [65535]byte
     var err error
     var n int
     var addr *net.UDPAddr
 
     for {
-        /* n, addr, err = u.conn.ReadFromUDP(pkt) */
-        n, err = u.conn.Read(pkt)
+        n, addr, err = u.conn.ReadFromUDP(pkt[0:])
         if err != nil {
             log.Printf("Error reading packet: %s\n", err)
             break
         }
-        _ = addr
+
+        if n == 0 {
+            time.Sleep(100 * time.Millisecond)
+            continue
+        }
+
+        if !addr.IP.Equal(u.addr.IP) {
+            log.Printf("IPs not equal: %s != %s\n", addr.IP, u.addr.IP)
+            continue
+        }
+
+        if addr.Port != u.addr.Port {
+            log.Printf("Ports not equal: %d != %d\n", addr.Port, u.addr.Port)
+            continue
+        }
+
         log.Printf("Received packet of length %d\n", n)
-
-        /* if addr != u.addr { */
-        /*     log.Printf("Received packet from bad remote: %s\n", addr) */
-        /*     continue */
-        /* } */
-
         u.recv_ch <- pkt[0:n]
     }
 }
@@ -135,7 +142,7 @@ func (u *UDPPacketClient) Close() {
     u.conn.Close()
 
     clientMapLock.Lock()
-    delete(clientMap, u.addr)
+    delete(clientMap, u.addr.String())
     clientMapLock.Unlock()
 }
 
@@ -203,7 +210,7 @@ func (u *UDPTransport) acceptConnections() {
         log.Printf("Got packet of length %d\n", n)
 
         clientMapLock.RLock()
-        client, found := clientMap[addr]
+        client, found := clientMap[addr.String()]
         clientMapLock.RUnlock()
 
         if !found {
@@ -217,7 +224,7 @@ func (u *UDPTransport) acceptConnections() {
             go client.doForwardSend(u.send_ch)
 
             clientMapLock.Lock()
-            clientMap[addr] = client
+            clientMap[addr.String()] = client
             clientMapLock.Unlock()
 
             u.accept_ch <- client
