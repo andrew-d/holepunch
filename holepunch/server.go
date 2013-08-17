@@ -1,14 +1,9 @@
 package holepunch
 
 import (
-    "crypto/hmac"
-    "crypto/sha256"
-    "crypto/subtle"
-    "encoding/hex"
     flag "github.com/ogier/pflag"
     //"fmt"
     "log"
-    "time"
 
     "github.com/andrew-d/holepunch/transports"
     "github.com/andrew-d/holepunch/tuntap"
@@ -66,67 +61,17 @@ func startTransports(tt tuntap.Device) {
 func handleNewClient(tt tuntap.Device, client transports.PacketClient) {
     log.Printf("Accepted new client (reliable = %t)\n", client.IsReliable())
 
-    var closeClient bool = true
-    defer func() {
-        if closeClient {
-            log.Printf("Closing underlying client...\n")
-            client.Close()
-        }
-    }()
-
-    send_ch := client.SendChannel()
-    recv_ch := client.RecvChannel()
-
-    nonce := randomBytes(32)
-    hm := hmac.New(sha256.New, []byte(password))
-    _, err := hm.Write(nonce)
-    if err != nil {
-        log.Printf("Error computing HMAC: %s\n", err)
-        return
-    }
-
-    expected := make([]byte, 64)
-    hex.Encode(expected, hm.Sum(nil))
-
-    // Send the challenge...
-    send_ch <- nonce
-
-    // ... and wait for one of three things:
-    //  - Successful authentication
-    //  - Unsuccessful authentication
-    //  - Timeout
-    select {
-    case resp := <-recv_ch:
-        // Note that it is IMPORTANT we use this function here, to avoid leaking
-        // timing information.  Then, if authentication fails, we just outright
-        // exit, and let the deferred close handle things.
-        if subtle.ConstantTimeCompare(resp, expected) != 1 {
-            log.Printf("Authentication failure")
-            send_ch <- []byte("failure")
-            return
-        } else {
-            log.Println("Authentication success!")
-        }
-    case <-time.After(10 * time.Second):
-        log.Printf("Authentication timeout")
-        return
-    }
-
-    send_ch <- []byte("success")
-
     // Set up encryption.
     enc_client, err := transports.NewEncryptedPacketClient(client, "foobar")
     if err != nil {
         log.Printf("Could not initialize encryption: %s\n", err)
+        client.Close()
         return
     }
-    recv_ch = enc_client.RecvChannel()
-    send_ch = enc_client.SendChannel()
-
-    // XXX: nasty hack to not double-free.  enc_client really should always
-    // free the underlying client, though
-    closeClient = false
     defer enc_client.Close()
+
+    recv_ch := enc_client.RecvChannel()
+    send_ch := enc_client.SendChannel()
 
     for {
         select {

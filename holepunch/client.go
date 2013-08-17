@@ -79,10 +79,16 @@ func startClient(tt tuntap.Device, hpserver string) {
             continue
         }
 
-        if doAuth(curr_conn) {
-            conn = curr_conn
-            break
+        // Set up encryption.
+        enc_conn, err := transports.NewEncryptedPacketClient(curr_conn, "foobar")
+        if err != nil {
+            log.Printf("Could not initialize encryption: %s\n", err)
+            curr_conn.Close()
+            continue
         }
+
+        // Encryption is valid, which means that we're authenticated.
+        conn = enc_conn
     }
 
     if conn == nil {
@@ -91,17 +97,10 @@ func startClient(tt tuntap.Device, hpserver string) {
     }
     log.Printf("Connected to server (reliable = %t)\n", conn.IsReliable())
 
-    // Set up encryption.
-    enc_conn, err := transports.NewEncryptedPacketClient(conn, "foobar")
-    if err != nil {
-        log.Printf("Could not initialize encryption: %s\n", err)
-        conn.Close()
-        return
-    }
-    recv_ch := enc_conn.RecvChannel()
-    send_ch := enc_conn.SendChannel()
+    recv_ch := conn.RecvChannel()
+    send_ch := conn.SendChannel()
 
-    defer enc_conn.Close()
+    defer conn.Close()
 
     for {
         // TODO: some way of stopping this
