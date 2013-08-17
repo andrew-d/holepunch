@@ -3,8 +3,8 @@ package transports
 import (
     "bytes"
     "encoding/binary"
-    "io/ioutil"
     "net"
+    "log"
 )
 
 type ICMPHeader struct {
@@ -19,7 +19,7 @@ type ICMPPacketClient struct {
     conn         *net.IPConn
     send_ch      chan []byte
     recv_ch      chan []byte
-    old_icmp_val []byte
+    old_icmp_val bool
 }
 
 /* Architecture:
@@ -50,12 +50,12 @@ func NewICMPPacketClient(server string) (*ICMPPacketClient, error) {
     // TODO: start the read process.
     send_ch := make(chan []byte)
     recv_ch := make(chan []byte)
-    client := &ICMPPacketClient{conn, send_ch, recv_ch, nil}
+    client := &ICMPPacketClient{conn, send_ch, recv_ch, true}
 
     // TODO: cross-platform!
-    icmp_val, err := ioutil.ReadFile("/proc/sys/net/ipv4/icmp_echo_ignore_all")
+    old_val, err := ChangeRespondToPings(false)
     if err != nil {
-        client.old_icmp_val = icmp_val
+        client.old_icmp_val = old_val
     }
 
     return nil, nil
@@ -87,14 +87,9 @@ func (c *ICMPPacketClient) Describe() string {
 }
 
 func (c *ICMPPacketClient) Close() {
-    // TODO: cross-platform!
-    if c.old_icmp_val != nil {
-        err := ioutil.WriteFile("/proc/sys/net/ipv4/icmp_echo_ignore_all",
-            c.old_icmp_val,
-            0644)
-        if err != nil {
-            // TODO: log error
-        }
+    _, err := ChangeRespondToPings(c.old_icmp_val)
+    if err != nil {
+        log.Printf("Error restoring ICMP setting: %s\n", err)
     }
 }
 
