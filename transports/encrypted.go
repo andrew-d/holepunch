@@ -209,6 +209,8 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     // encrypted constant (above), and waiting for a message from the server.
     // If we get a message that decrypts to the same constant, then we assume
     // that everything is legit.
+    // TODO: this is borked, replay attack, etc etc.  challenge-response is
+    // where it's at.
     timeout := time.After(10 * time.Second)
 
     var test_bytes = []byte(TEST_STRING)

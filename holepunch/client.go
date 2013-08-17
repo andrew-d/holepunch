@@ -66,6 +66,9 @@ func startClient(tt tuntap.Device, hpserver string) {
         case "tcp":
             curr_conn, err = transports.NewTCPPacketClient(hpserver)
 
+        case "udp":
+            curr_conn, err = transports.NewUDPPacketClient(hpserver)
+
         default:
             log.Printf("Unknown method: %s\n", m)
             continue

@@ -34,17 +34,29 @@ func StopServer() {
 func startTransports(tt tuntap.Device) {
     defer tt.Close()
 
-    trans, err := transports.NewTCPTransport("0.0.0.0")
+    tcpt, err := transports.NewTCPTransport("0.0.0.0")
     if err != nil {
         log.Printf("Error starting TCP transport: %s\n", err)
         return
     }
 
+    udpt, err := transports.NewUDPTransport("0.0.0.0")
+    if err != nil {
+        log.Printf("Error starting UDP transport: %s\n", err)
+        return
+    }
+
     // Repeatedly accept clients.
-    ch := trans.AcceptChannel()
+    tcp_ch := tcpt.AcceptChannel()
+    udp_ch := udpt.AcceptChannel()
+
+    var client transports.PacketClient
     for {
         // TODO: have some way of stopping this
-        client := <-ch
+        select {
+        case client = <-tcp_ch:
+        case client = <-udp_ch:
+        }
 
         go handleNewClient(tt, client)
     }

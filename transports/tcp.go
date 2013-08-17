@@ -19,24 +19,21 @@ const TCP_PORT = 44461
 func NewTCPPacketClient(server string) (*TCPPacketClient, error) {
     host := fmt.Sprintf("%s:%d", server, TCP_PORT)
 
-    // Connect to this client.
     conn, err := net.Dial("tcp", host)
     if err != nil {
         log.Printf("Error connecting with TCP: %s", err)
         return nil, err
     }
 
-    return newClientFromConn(host, conn), nil
+    return newTcpClientFromConn(host, conn), nil
 }
 
-func newClientFromConn(host string, conn net.Conn) *TCPPacketClient {
+func newTcpClientFromConn(host string, conn net.Conn) *TCPPacketClient {
     send_ch := make(chan []byte)
     recv_ch := make(chan []byte)
 
-    // Create structure.
     ret := &TCPPacketClient{host, send_ch, recv_ch, conn}
 
-    // Start copying goroutines.
     go ret.doSend()
     go ret.doRecv()
 
@@ -44,13 +41,16 @@ func newClientFromConn(host string, conn net.Conn) *TCPPacketClient {
 }
 
 func (c *TCPPacketClient) doSend() {
-    length := make([]byte, 2)
+    var pkt []byte
+    var err error
+    var length = make([]byte, 2)
+
     for {
         // TODO: select on "stop" channel
-        pkt := <-c.send_ch
+        pkt = <-c.send_ch
 
         binary.LittleEndian.PutUint16(length, uint16(len(pkt)))
-        _, err := c.conn.Write(length)
+        _, err = c.conn.Write(length)
         if err != nil {
             log.Printf("Error writing length: %s\n", err)
             break
@@ -65,16 +65,20 @@ func (c *TCPPacketClient) doSend() {
 }
 
 func (c *TCPPacketClient) doRecv() {
-    length := make([]byte, 2)
+    var err error
+    var ilen uint16
+    var pkt []byte
+    var length = make([]byte, 2)
+
     for {
-        _, err := c.conn.Read(length)
+        _, err = c.conn.Read(length)
         if err != nil {
             log.Printf("Error reading length: %s\n", err)
             break
         }
-        ilen := binary.LittleEndian.Uint16(length)
+        ilen = binary.LittleEndian.Uint16(length)
 
-        pkt := make([]byte, ilen)
+        pkt = make([]byte, ilen)
 
         _, err = c.conn.Read(pkt)
         if err != nil {
@@ -138,7 +142,7 @@ func (t *TCPTransport) acceptConnections() {
             continue
         }
 
-        client := newClientFromConn("host", conn)
+        client := newTcpClientFromConn("host", conn)
         t.accept_ch <- client
     }
 }
