@@ -53,12 +53,12 @@ type secretboxMode struct {
 }
 
 type EncryptedPacketClient struct {
-    underlying   PacketClient
-    send_mode   encryptionMode
-    recv_mode encryptionMode
-    send_ch      chan []byte
-    recv_ch      chan []byte
-    key          []byte
+    underlying PacketClient
+    send_mode  encryptionMode
+    recv_mode  encryptionMode
+    send_ch    chan []byte
+    recv_ch    chan []byte
+    key        []byte
 }
 
 const TEST_STRING = "this is a test string"
@@ -82,11 +82,11 @@ func (m *aesMode) Decrypt(encrypted []byte) ([]byte, bool) {
         log.Printf("AES: Not good: len (%d) < 32\n", len(encrypted))
         return nil, false
     }
-    output := make([]byte, len(encrypted) - 32)
+    output := make([]byte, len(encrypted)-32)
 
     // Short forms!
-    data := encrypted[0:len(encrypted) - 32]
-    mac := encrypted[len(encrypted) - 32:]
+    data := encrypted[0 : len(encrypted)-32]
+    mac := encrypted[len(encrypted)-32:]
 
     // Validate HMAC.
     m.mac.Reset()
@@ -141,10 +141,10 @@ func (m *secretboxMode) Decrypt(encrypted []byte) ([]byte, bool) {
     }
 
     for i := 0; i < 24; i++ {
-        nonce[i] = encrypted[len(encrypted) - 24 + i]
+        nonce[i] = encrypted[len(encrypted)-24+i]
     }
 
-    data := encrypted[:len(encrypted) - 24]
+    data := encrypted[:len(encrypted)-24]
     opened, ok := secretbox.Open(opened[:0], data, &nonce, &m.key)
     if !ok {
         log.Printf("secretbox: Not good: Open() returned false\n")
@@ -229,7 +229,7 @@ func NewEncryptedPacketClient(underlying PacketClient, secret string) (*Encrypte
     ret.SendChannel() <- test_bytes
 
     select {
-    case msg := <- ret.RecvChannel():
+    case msg := <-ret.RecvChannel():
         // Verify it matches.
         if len(msg) != len(test_bytes) || subtle.ConstantTimeCompare(msg, test_bytes) != 1 {
             log.Printf("Received invalid message\n")
