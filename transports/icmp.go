@@ -3,8 +3,8 @@ package transports
 import (
     "bytes"
     "encoding/binary"
-    "net"
     "log"
+    "net"
 )
 
 type ICMPHeader struct {
@@ -53,7 +53,7 @@ func NewICMPPacketClient(server string) (*ICMPPacketClient, error) {
     client := &ICMPPacketClient{conn, send_ch, recv_ch, true}
 
     // TODO: cross-platform!
-    old_val, err := ChangeRespondToPings(false)
+    old_val, err := ChangeIgnorePings(false)
     if err != nil {
         client.old_icmp_val = old_val
     }
@@ -87,7 +87,7 @@ func (c *ICMPPacketClient) Describe() string {
 }
 
 func (c *ICMPPacketClient) Close() {
-    _, err := ChangeRespondToPings(c.old_icmp_val)
+    _, err := ChangeIgnorePings(c.old_icmp_val)
     if err != nil {
         log.Printf("Error restoring ICMP setting: %s\n", err)
     }

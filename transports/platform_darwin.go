@@ -8,6 +8,6 @@ import (
 )
 
 // TODO: error on unsupported platforms?
-func ChangeRespondToPings(enabled bool) (bool, error) {
+func ChangeIgnorePings(enabled bool) (bool, error) {
     return false, nil
 }

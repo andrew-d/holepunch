@@ -130,7 +130,7 @@ func doAuth(conn transports.PacketClient) bool {
     var nonce []byte
     select {
     case nonce = <-recv_ch:
-        // fall through
+        // fallthrough
     case <-timeout_ch:
         log.Printf("Client authentication timed out: receiving nonce\n")
         return false
@@ -148,7 +148,7 @@ func doAuth(conn transports.PacketClient) bool {
 
     select {
     case send_ch <- resp:
-        // fall through
+        // fallthrough
     case <-timeout_ch:
         log.Printf("Client authentication timed out: sending respond\n")
         return false
@@ -158,7 +158,7 @@ func doAuth(conn transports.PacketClient) bool {
     var serv_resp []byte
     select {
     case serv_resp = <-recv_ch:
-        // fall through
+        // fallthrough
     case <-timeout_ch:
         log.Printf("Client authentication timed out: waiting for confirmation\n")
         return false
