@@ -22,20 +22,6 @@ type ICMPPacketClient struct {
     old_icmp_val bool
 }
 
-/* Architecture:
- * -------------
- * We hold open one single socket that receives all ICMP packets destined for
- * the host computer.  We maintain a map that connects the remote IP address of
- * a packet to the client associated with it.  For each incoming packet, we
- * pass the packet to the associated client, or, if it isn't associated with a
- * client, we pass it to the accepting channel.  The accepting goroutine will
- * then either accept the new client, or respond to the ping packet according
- * to the settings specified.
- *
- *
- *
- */
-
 func NewICMPPacketClient(server string) (*ICMPPacketClient, error) {
     addr, err := net.ResolveIPAddr("ip", server)
     if err != nil {
